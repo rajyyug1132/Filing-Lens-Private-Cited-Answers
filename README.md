@@ -24,21 +24,21 @@ question ─▶ hybrid retrieval (dense + BM25, RRF, k=8, prompt capped at 3000 
 
 `npm run bench` runs over FinanceBench open-source: 150 questions and 84 real 10-K/10-Q/8-K PDFs. There are three sets, never merged:
 - **gold answer:** the question asked against its own filing
-- **Easy abstain:** the same question asked against another company's 10-K
-- **Hard abstain:** the question asked against its own filing with the gold pages removed from the index
+- **Easy abstain:** the same question asked against another company's 10-K from the **same CV fold**, so no filing appears in more than one fold
+- **Hard abstain:** the question asked against its own filing with the gold pages removed, **plus any other page that still contains every gold number**. Questions whose retrieved context still contains the answer are excluded (10 of 150), leaving 140.
 
-One gate is trained on all 450 instances (class-weighted to 50/50) with 5-fold CV grouped by company, then scored separately on Easy (answer + Easy) and Hard (answer + Hard).
+One gate is trained on all 440 instances (class-weighted to 50/50) with 5-fold CV grouped by company, then scored separately on Easy (answer + Easy) and Hard (answer + Hard).
 
-### Feature gate (out-of-fold, all 450)
+### Feature gate (out-of-fold, all 440)
 
 | Gate | Easy acc. | Easy ECE ↓ | Easy abstain P / R | Hard acc. | Hard ECE ↓ | Hard abstain P / R | Decision latency p50 |
 |---|---|---|---|---|---|---|---|
-| No gate (always answer) | 0.500 | 0.500 | — / 0.000 | 0.500 | 0.500 | — / 0.000 | 0 ms |
-| Retrieval score threshold (uncalibrated) | 0.623 | 0.204 | 0.570 / 1.000 | 0.523 | 0.085 | 0.515 / 0.800 | <0.01 ms |
-| LR gate, no temperature | 0.867 | 0.185 | 0.813 / 0.953 | 0.517 | 0.144 | 0.535 / 0.253 | 0.41 ms |
-| Calibrated LR gate (LR + temperature), shipped (v2 features) | 0.867 | 0.169 | 0.813 / 0.953 | 0.517 | 0.159 | 0.535 / 0.253 | 0.41 ms |
+| No gate (always answer) | 0.500 | 0.500 | — / 0.000 | 0.517 | 0.483 | — / 0.000 | 0 ms |
+| Retrieval score threshold (uncalibrated) | 0.620 | 0.248 | 0.569 / 0.993 | 0.528 | 0.076 | 0.507 / 0.829 | <0.01 ms |
+| LR gate, no temperature | 0.870 | 0.161 | 0.828 / 0.933 | 0.524 | 0.139 | 0.517 / 0.221 | 0.42 ms |
+| Calibrated LR gate (LR + temperature), shipped (v2 features) | 0.870 | 0.149 | 0.828 / 0.933 | 0.524 | 0.151 | 0.517 / 0.221 | 0.42 ms |
 
-Hard accuracy with v1 features was 0.513 (< 0.75), so the gate was retrained once with two "does the top passage answer this kind of question" features. Before → after: Easy acc 0.870 → 0.867, Easy ECE 0.166 → 0.169; Hard acc 0.513 → 0.517, Hard ECE 0.162 → 0.159.
+Hard accuracy with v1 features was 0.528 (< 0.75), so the gate was retrained once with two "does the top passage answer this kind of question" features. Before → after: Easy acc 0.853 → 0.870, Easy ECE 0.152 → 0.149; Hard acc 0.528 → 0.524, Hard ECE 0.147 → 0.151.
 
 Recall of the gold page (150 answer cases): @1 0.233 · @2 0.333 · @4 0.440 · @8 0.633 · @12 0.700 · @16 0.733
 
@@ -48,11 +48,13 @@ With the 3000-token cap (drop lowest-ranked chunks; 0.411 tokens/char estimate):
 
 **Shipped k = 8** (no k reached recall 0.6 under the 3000-token cap; k with the highest capped recall).
 
-Sentence snippets (what the verifier reads, ≤2,200 chars): gold page present in 52.7% of answer cases; verifier prompt with 2 worst-case demos: p95 2459, max 2674 tokens.
+Sentence snippets (what the verifier reads, ≤2,200 chars): gold page present in 52.7% of answer cases; verifier prompt with 2 worst-case demos: p95 2295, max 2405 tokens.
 
-Each set: 150 answer + 150 abstain instances; one gate trained on all 450 with 5-fold CV grouped by company; Easy and Hard scored separately. Retrieval (query embed + hybrid search) p50 9.46 ms, p95 23.06 ms on Node v22.22.0, 4 vCPU container, no GPU.
+Hard set: annotated gold pages plus 252 other pages that still contained every gold number were removed; 10 questions were excluded because the retrieved context still contained the answer (4 by numbers, 6 by answer terms), leaving 140. Easy abstains use another company's 10-K from the same CV fold, so no filing crosses folds.
 
-**Hard ceiling of the feature gate: 0.52** (chance is 0.5). It sees retrieval scores and word overlap, not content, so "the gold page" and "a nearby page about the same metric" look the same to it. The extra "top passage answers this kind of question" features did not move it. That gap is what the verifier is for.
+Sets: 150 answer, 150 Easy, 140 Hard; one gate trained on all of them with 5-fold CV grouped by company; Easy and Hard scored separately. Retrieval (query embed + hybrid search) p50 9.47 ms, p95 22.41 ms on Node v22.22.0, 4 vCPU container, no GPU.
+
+**Hard ceiling of the feature gate: 0.52** on the cleaned Hard set, where always answering scores 0.517 (150 answer vs 140 Hard). It sees retrieval scores and word overlap, not content, so "the gold page" and "a nearby page about the same metric" look the same to it. The extra "top passage answers this kind of question" features did not move it. That gap is what the verifier is for.
 
 ![Recall vs k](bench/results/recall.svg)
 
@@ -62,11 +64,11 @@ Each set: 150 answer + 150 abstain instances; one gate trained on all 450 with 5
 
 | System | Easy acc. | Hard acc. | ECE ↓ (Easy / Hard) | Citation page match | p50 latency | Verifier calls |
 |---|---|---|---|---|---|---|
-| Feature gate only | 0.864 | 0.518 | 0.191 / 0.157 | 0.279 (top-ranked page) | 0.41 ms | 0% |
+| Feature gate only | 0.864 | 0.524 | 0.192 / 0.156 | 0.279 (top-ranked page) | 0.42 ms | 0% |
 | Verifier only (Qwen2.5-3B, DSPy-compiled) | pending (Kaggle) | pending (Kaggle) | pending | pending | pending | 100% |
-| Cascade: gate → verifier | pending (Kaggle) | pending (Kaggle) | pending | pending | pending | 53% |
+| Cascade: gate → verifier | pending (Kaggle) | pending (Kaggle) | pending | pending | pending | 52% |
 
-Test split only: 165 instances (company-grouped; 55 per set). Gate latency: features + LR on Node v22.22.0, 4 vCPU container, no GPU; verifier latency: one verifier call on the Kaggle T4 build named in the row. Retrieval (shared by all rows) is not included.
+Test split only: 160 instances (company-grouped): 55 answer, 55 Easy, 50 Hard. Only 27 of the 55 answer cases have a gold page in the snippets, which caps citation page match and answer accuracy. Gate latency: features + LR on Node v22.22.0, 4 vCPU container, no GPU; verifier latency: one verifier call on the Kaggle T4 build named in the row. Retrieval (shared by all rows) is not included.
 
 The verifier and cascade rows are filled by `python bench/ingest_gen.py` once `bench/results/cascade_results.jsonl` comes back from Kaggle.
 
@@ -97,6 +99,6 @@ Tests use `?engine=fixture`, which replays `public/fixtures/recorded-responses.j
 ## Limits
 - The feature gate can't see content: Hard accuracy 0.52. Verifier and cascade numbers are pending the Kaggle run.
 - Retrieval is the bottleneck: gold-page recall@4 0.440, @8 0.633. Under the 3k cap the 3B sees the gold page 57% of the time, and the sentence snippets keep it 53% of the time.
-- A failure found and fixed: Best Buy's 10-K never mentions Walmart, yet "Walmart capex?" scored 0.69 and passed the gate. Adding a feature for whether the companies a question names appear in the filing fixed it (0.820 → 0.910 on the earlier own-vs-wrong-company bench; `bench/results/history.json`).
+- A failure found and fixed: Best Buy's 10-K never mentions Walmart, yet "Walmart capex?" passed the gate. Adding a feature for whether the companies a question names appear in the filing fixed it (0.820 → 0.910 on the earlier own-vs-wrong-company bench; `bench/results/history.json`).
 - Answers are auto-graded (number within 1%, else token-F1), an approximation of FinanceBench's human grading.
 - Scanned PDFs (no text layer) are rejected; there is no OCR. Tables are read as flattened text.

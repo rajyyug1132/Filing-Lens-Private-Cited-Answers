@@ -26,8 +26,12 @@ function patch() {
   const f = window.fetch.bind(window);
   window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
     const method = (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase();
-    const bytes = bodySize(init?.body);
-    if (bytes > 0 || !['GET', 'HEAD'].includes(method)) sent.push({ method, url: String(input instanceof Request ? input.url : input), bytes });
+    const url = String(input instanceof Request ? input.url : input);
+    if (init?.body != null || !['GET', 'HEAD'].includes(method)) {
+      if (init?.body == null && input instanceof Request)
+        input.clone().arrayBuffer().then((b) => sent.push({ method, url, bytes: b.byteLength || 1 }), () => sent.push({ method, url, bytes: 1 }));
+      else sent.push({ method, url, bytes: Math.max(1, bodySize(init?.body)) });
+    }
     return f(input, init);
   };
   const xo = XMLHttpRequest.prototype.open;
@@ -42,6 +46,10 @@ function patch() {
     if (bytes > 0) sent.push({ method: this._m ?? 'POST', url: this._u ?? '', bytes });
     return xs.call(this, body);
   };
+  // Requests from workers bypass the wrappers above; the service worker reports those.
+  navigator.serviceWorker?.addEventListener('message', (e: MessageEvent) => {
+    if (e.data?.type === 'filing-lens:body') sent.push({ method: `${e.data.method} (sw)`, url: e.data.url, bytes: Math.max(1, e.data.bytes) });
+  });
   if (navigator.sendBeacon) {
     const sb = navigator.sendBeacon.bind(navigator);
     navigator.sendBeacon = (url, data) => {
@@ -88,7 +96,10 @@ export function PrivacySheet({ log, onClose }: { log: NetLog; onClose: () => voi
         </div>
         <div className="sheet-body pad">
           <div className="bigstat" data-testid="bytes-sent">{log.docBytesSent} B</div>
-          <div className="muted small">request-body bytes sent by this page this session (fetch, XHR and beacon are all counted)</div>
+          <div className="muted small">
+            request-body bytes sent this session: fetch, XHR and beacon from this page, plus every request the service worker sees from the page and its
+            workers (the service worker is active from the second visit on)
+          </div>
           <ul className="facts small">
             <li>The PDF is read from your file picker with pdf.js, in this tab.</li>
             <li>Embeddings (MiniLM, 23 MB) and the ONNX runtime are served from this app’s own origin.</li>

@@ -10,7 +10,8 @@ export interface CitationCheck {
   ok: boolean;
 }
 
-const CITE_RE = /\[\s*(?:p(?:age|g)?\.?\s*)(\d+(?:\s*[,;–-]\s*(?:p(?:age|g)?\.?\s*)?\d+)*)\s*\]/gi;
+export const CITE_SOURCE = String.raw`\[\s*(?:p(?:age|g)?\.?\s*)(\d+(?:\s*[,;–-]\s*(?:p(?:age|g)?\.?\s*)?\d+)*)\s*\]`;
+const CITE_RE = new RegExp(CITE_SOURCE, 'gi'); // shared with the chip renderer in components/AnswerCard.tsx
 
 export function parseCitations(text: string): number[] {
   const out: number[] = [];

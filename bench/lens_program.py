@@ -49,17 +49,48 @@ def metric(gold, pred, trace=None):
 
 
 def to_example(inst):
-    """gen_inputs.jsonl row -> dspy.Example. Answer cases carry their gold page(s) and a
-    gold answer tagged with the first gold page (FinanceBench answers have no [p.N] tags)."""
-    pages = [f"p.{p}" for p in inst["gold_pages"]]
-    ans = inst["kind"] == "own_doc"
-    return dspy.Example(
+    """gen_inputs.jsonl row -> dspy.Example.
+
+    Gold verdict is ANSWER only when the question is on its own filing AND a gold page is among
+    the snippets the model sees (the instruction says decide ONLY from the snippets); otherwise
+    ABSTAIN. `reachable` keeps that distinction for reporting. Only ANSWER rows carry an `answer`
+    (the gold answer tagged with the gold snippet page), so abstain rows never become empty-answer
+    demos for the answerer."""
+    gold_in_snips = [p for p in inst["gold_pages"] if p in inst.get("snippet_pages", [])]
+    answer = inst["kind"] == "own_doc" and bool(gold_in_snips)
+    fields = dict(
         id=inst["id"],
         kind=inst["kind"],
+        reachable=answer,
         question=inst["question"],
         snippets=inst["snippets"],
-        verdict="ANSWER" if ans else "ABSTAIN",
-        evidence_page=pages[0] if ans and pages else "NONE",
-        gold_pages=pages,
-        answer=f"{inst['gold_answer']} [{pages[0]}]" if ans and pages else "",
-    ).with_inputs("question", "snippets")
+        verdict="ANSWER" if answer else "ABSTAIN",
+        evidence_page=f"p.{gold_in_snips[0]}" if answer else "NONE",
+        gold_pages=[f"p.{p}" for p in inst["gold_pages"]],
+    )
+    if answer:
+        fields["answer"] = f"{inst['gold_answer']} [p.{gold_in_snips[0]}]"
+    return dspy.Example(**fields).with_inputs("question", "snippets")
+
+
+def stratified(examples):
+    """Interleave ANSWER and ABSTAIN examples (ANSWER first) so BootstrapFewShot sees both kinds
+    early instead of stopping after two abstain traces."""
+    pos = [e for e in examples if e.verdict == "ANSWER"]
+    neg = [e for e in examples if e.verdict != "ANSWER"]
+    out = []
+    for i in range(max(len(pos), len(neg))):
+        out += ([pos[i]] if i < len(pos) else []) + ([neg[i]] if i < len(neg) else [])
+    return out
+
+
+def balanced_score(program, devset):
+    """Mean of per-class metric (ANSWER cases, ABSTAIN cases): an always-ABSTAIN program scores 0.5."""
+    by = {"ANSWER": [], "ABSTAIN": []}
+    for ex in devset:
+        try:
+            pred = program(question=ex.question, snippets=ex.snippets)
+            by[ex.verdict].append(metric(ex, pred))
+        except Exception:
+            by[ex.verdict].append(0.0)
+    return sum(sum(v) / len(v) for v in by.values() if v) / sum(1 for v in by.values() if v)
