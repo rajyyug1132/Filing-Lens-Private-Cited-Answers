@@ -13,11 +13,11 @@ Inputs come from the cloud bench (`npm run bench`) on `main`: `bench/results/gen
 questions × 3 sets (`own_doc` = gold answer, `off_doc` = Easy abstain, `gold_removed` = Hard abstain), with the exact
 sentence snippets the browser builds, a company-grouped `split` (train / dev / test) and the feature gate's out-of-fold `p_gate_oof`.
 
-1. Serve **Qwen2.5-3B-Instruct fp16 with vLLM** and compile the DSPy `Lens` program (verifier `Answerable` → `CitedAnswer`)
+1. Serve **Qwen2.5-3B-Instruct fp16 with vLLM** (`dtype=\"half\"`; if vLLM won't start, llama.cpp on the fp16 GGUF) and compile the DSPy `Lens` program (verifier `Answerable` → `CitedAnswer`)
    with `BootstrapFewShot` (2 demos) on the train split. Optionally try **MIPROv2 auto="light"** and keep it only if dev improves.
 2. Evaluate the compiled program on the test split with the **fp16 build** and with a **GGUF Q4_K_M build (llama.cpp)**, the
    quantisation closest to the phone. Each call uses exactly the messages DSPy's ChatAdapter renders, which are also what the browser sends.
-3. Write `cascade_results.jsonl`, `verifier.json` (DSPy save) and `app_verifier.json` (→ commit as `app/prompts/verifier.json`).
+3. Write `cascade_results.jsonl`, `token_counts.json`, `verifier.json` (DSPy save) and `app_verifier.json` (→ commit as `app/prompts/verifier.json`).
 
 `DRY_RUN=1` runs every cell on CPU with a stub LM and no downloads.
 """),
@@ -82,14 +82,29 @@ def start_server(cmd, port, name):
             time.sleep(10)
     raise RuntimeError(f"{name} did not come up")
 
+def start_fp16():
+    # fp16 arm: vLLM with dtype="half" (the T4 has no bf16). If vLLM fails to start, fall back to the
+    # llama.cpp server on an fp16 GGUF. DSPy and the eval only need an OpenAI-compatible endpoint on :8000.
+    try:
+        return start_server([sys.executable, "-m", "vllm.entrypoints.openai.api_server", "--model", HF_MODEL, "--served-model-name", "qwen2.5-3b",
+                             "--dtype", "half", "--max-model-len", "4096", "--gpu-memory-utilization", "0.85", "--port", "8000"], 8000, "vllm"), "vllm"
+    except Exception as e:
+        print("vLLM failed to start, falling back to llama.cpp fp16:", e)
+        subprocess.run(["pkill", "-f", "vllm.entrypoints"], check=False)
+        from huggingface_hub import snapshot_download
+        d = snapshot_download(GGUF_REPO, allow_patterns=["*fp16*.gguf"])
+        first = sorted(Path(d).glob("*fp16*.gguf"))[0]  # llama.cpp loads the remaining split shards itself
+        return start_server([sys.executable, "-m", "llama_cpp.server", "--model", str(first), "--model_alias", "qwen2.5-3b",
+                             "--n_gpu_layers", "-1", "--n_ctx", "4096", "--port", "8000"], 8000, "llamacpp_fp16"), "llamacpp"
+
 if DRY_RUN:
     from dspy.utils.dummies import DummyLM
     lm = DummyLM({"## evidence_page ##": {"verdict": "ANSWER", "evidence_page": "p.1"}, "## answer ##": {"answer": "Stub [p.1]."}})
-    vllm = None
+    fp16_server, FP16_BACKEND = None, "stub"
 else:
-    vllm = start_server([sys.executable, "-m", "vllm.entrypoints.openai.api_server", "--model", HF_MODEL, "--served-model-name", "qwen2.5-3b",
-                         "--dtype", "half", "--max-model-len", "4096", "--gpu-memory-utilization", "0.85", "--port", "8000"], 8000, "vllm")
+    fp16_server, FP16_BACKEND = start_fp16()
     lm = dspy.LM("openai/qwen2.5-3b", api_base="http://localhost:8000/v1", api_key="x", temperature=0.0, max_tokens=256)
+print("fp16 backend:", FP16_BACKEND)
 dspy.configure(lm=lm)
 """),
     code("""
@@ -185,13 +200,29 @@ if DRY_RUN:
     results += run_build("dry_run_stub", None, None)
 else:
     from openai import OpenAI
-    results += run_build("vllm_fp16", OpenAI(base_url="http://localhost:8000/v1", api_key="x"), "qwen2.5-3b")
+    results += run_build(f"fp16_{FP16_BACKEND}", OpenAI(base_url="http://localhost:8000/v1", api_key="x"), "qwen2.5-3b")
 print(len(results), "rows so far")
+"""),
+    code("""
+# Exact Qwen2.5 token counts (the model's own tokenizer + chat template) for the worst-case prompts:
+# the compiled verifier and answerer with their demos, over every test instance.
+token_counts = {"tokenizer": "skipped in dry run (no download)"}
+if not DRY_RUN:
+    from transformers import AutoTokenizer
+    tok = AutoTokenizer.from_pretrained(HF_MODEL)
+    n = lambda msgs: len(tok(tok.apply_chat_template(msgs, add_generation_prompt=True, tokenize=False), add_special_tokens=False)["input_ids"])
+    token_counts = {"tokenizer": HF_MODEL + " (apply_chat_template)"}
+    for name, pred in (("verifier", lens.check), ("answer", lens.answer)):
+        counts = sorted((n(adapter.format(pred.signature, pred.demos, {"question": e.question, "snippets": e.snippets})), e.id) for e in by_split["test"])
+        token_counts[name] = {"max": counts[-1][0], "worst_id": counts[-1][1], "p95": counts[int(0.95 * (len(counts) - 1))][0],
+                              "median": counts[len(counts) // 2][0], "demos": len(pred.demos), "budget": 3000, "fits": counts[-1][0] <= 3000}
+(OUT / "token_counts.json").write_text(json.dumps(token_counts, indent=2))
+print(json.dumps(token_counts, indent=2))
 """),
     code("""
 # Same compiled program on the quantised GGUF Q4_K_M build (llama.cpp), closest to what the phone runs
 if not DRY_RUN:
-    vllm.terminate(); vllm.wait(timeout=120)
+    fp16_server.terminate(); fp16_server.wait(timeout=120)
     from huggingface_hub import hf_hub_download
     from openai import OpenAI
     gguf = hf_hub_download(GGUF_REPO, GGUF_FILE)
@@ -206,13 +237,13 @@ with (OUT / "cascade_results.jsonl").open("w") as f:
 
 refs = [{"question": e.question, "snippets": e.snippets} for e in by_split["test"][:2]]
 export_verifier.export(lens, OUT / "app_verifier.json", refs,
-                       {"compiled": not DRY_RUN, "model": "stub (dry run)" if DRY_RUN else f"{HF_MODEL} fp16 via vLLM",
+                       {"compiled": not DRY_RUN, "model": "stub (dry run)" if DRY_RUN else f"{HF_MODEL} fp16 via {FP16_BACKEND}",
                         "optimizer": optimizer, "dev_metric": dev_score})
 print("wrote", OUT / "cascade_results.jsonl", OUT / "verifier.json", OUT / "app_verifier.json", f"| {time.time() - T0:.0f}s")
 """),
     md("""
-**Next:** from the notebook's Output tab download `cascade_results.jsonl`, `app_verifier.json` and `verifier.json`, then
-`cp app_verifier.json app/prompts/verifier.json`, `cp cascade_results.jsonl verifier.json bench/results/`, run
+**Next:** from the notebook's Output tab download `cascade_results.jsonl`, `token_counts.json`, `app_verifier.json` and `verifier.json`, then
+`cp app_verifier.json app/prompts/verifier.json`, `cp cascade_results.jsonl token_counts.json verifier.json bench/results/`, run
 `python bench/ingest_gen.py` and `npm test` (the prompt-equality test checks the browser rebuilds the compiled prompts exactly).
 Or push them and tell Claude "ingest".
 """),

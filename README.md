@@ -71,8 +71,8 @@ Test split only: 165 instances (company-grouped; 55 per set). Gate latency: feat
 The verifier and cascade rows are filled by `python bench/ingest_gen.py` once `bench/results/cascade_results.jsonl` comes back from Kaggle.
 
 ### Kaggle run (T4)
-1. Merge to `main` (the notebook reads its inputs from `main`). Import `bench/kaggle_gen.ipynb` with GPU T4 and Internet on, and Run All. It serves Qwen2.5-3B fp16 with vLLM, compiles `Lens` with BootstrapFewShot (2 demos) on the train split, optionally runs MIPROv2 light (kept only if dev improves), then evaluates on the test split with fp16 and with the GGUF Q4_K_M build (llama.cpp).
-2. Download `cascade_results.jsonl`, `app_verifier.json` and `verifier.json`. Commit `app_verifier.json` as `app/prompts/verifier.json`, and the other two to `bench/results/`.
+1. Merge to `main` (the notebook reads its inputs from `main`). Import `bench/kaggle_gen.ipynb` with GPU T4 and Internet on, and Run All. It serves Qwen2.5-3B fp16 with vLLM (`dtype=half`, since the T4 has no bf16; if vLLM won't start it falls back to llama.cpp on the fp16 GGUF), logs exact Qwen2.5 token counts for the worst-case prompts (`token_counts.json`), compiles `Lens` with BootstrapFewShot (2 demos) on the train split, optionally runs MIPROv2 light (kept only if dev improves), then evaluates on the test split with fp16 and with the GGUF Q4_K_M build (llama.cpp).
+2. Download `cascade_results.jsonl`, `token_counts.json`, `app_verifier.json` and `verifier.json`. Commit `app_verifier.json` as `app/prompts/verifier.json`, and the rest to `bench/results/`.
 3. Run `python bench/ingest_gen.py && npm test && node deck/build.mjs`, or push and say "ingest".
 
 `DRY_RUN=1` executes every notebook cell on CPU with DSPy's DummyLM (checked with nbclient). `ingest_gen.py` refuses stub output.
