@@ -50,12 +50,17 @@ if not DRY_RUN:
 def fetch(rel):
     \"\"\"Repo file: local checkout first (dry run / CI), else the main branch on GitHub.\"\"\"
     p = Path(rel)
-    return p.read_text() if p.exists() else urllib.request.urlopen(f"{REPO_RAW}/{rel}", timeout=60).read().decode()
+    if p.exists():
+        return p.read_text()
+    # cache-buster: raw.githubusercontent.com caches files for up to 5 minutes
+    return urllib.request.urlopen(f"{REPO_RAW}/{rel}?nocache={int(time.time())}", timeout=60).read().decode()
 
 if not Path("bench/lens_program.py").exists():
     for mod in ("bench/lens_program.py", "bench/export_verifier.py"):
         Path(Path(mod).name).write_text(fetch(mod))
 sys.path.insert(0, "bench" if Path("bench/lens_program.py").exists() else ".")
+for m in ("lens_program", "export_verifier"):  # re-running in the same kernel must not reuse an old import
+    sys.modules.pop(m, None)
 import dspy
 from lens_program import Lens, balanced_score, metric, norm_page, stratified, to_example
 import export_verifier
