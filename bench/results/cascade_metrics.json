@@ -1,22 +1,22 @@
 {
   "split": "test",
-  "instances": 165,
+  "instances": 160,
   "rows": {
     "Feature gate only": {
       "easy_acc": 0.8636363636363636,
-      "easy_ece": 0.19086278121010553,
+      "easy_ece": 0.1915827809260523,
       "easy_n": 110,
-      "hard_acc": 0.5181818181818182,
-      "hard_ece": 0.1568227027161424,
-      "hard_n": 110,
+      "hard_acc": 0.5238095238095238,
+      "hard_ece": 0.15583477881709235,
+      "hard_n": 105,
       "citation_page_match": 0.27906976744186046,
       "answered_gold_answer_cases": 43,
-      "latency_p50_ms": 0.4130309999927704,
+      "latency_p50_ms": 0.4203970000053232,
       "verifier_calls_pct": 0.0,
       "page_source": "top-ranked retrieved page",
       "latency_where": "Node v22.22.0, 4 vCPU container, no GPU"
     }
   },
   "status": "pending",
-  "cascade_verifier_calls_pct": 52.72727272727273
+  "cascade_verifier_calls_pct": 52.5
 }

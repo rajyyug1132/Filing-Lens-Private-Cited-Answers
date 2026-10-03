@@ -1,17 +1,19 @@
 'use client';
 
 import { Fragment } from 'react';
+import { CITE_SOURCE, parseCitations } from '@/lib/cite';
 import type { Outcome } from '@/lib/pipeline';
 
-const CITE_SPLIT = /(\[\s*p\.?\s*\d+(?:\s*[,;]\s*p?\.?\s*\d+)*\s*\])/gi;
+// Same pattern lib/cite.ts validates with, so every accepted citation gets a chip.
+const CITE_SPLIT = new RegExp(`(${CITE_SOURCE.replace('(\\d+', '(?:\\d+')})`, 'gi');
+const IS_CITE = new RegExp(`^${CITE_SOURCE}$`, 'i');
 
 function Cited({ text, onPage }: { text: string; onPage: (p: number) => void }) {
   return (
     <p className="answer-text" data-testid="answer-text">
       {text.split(CITE_SPLIT).map((part, i) => {
-        if (!CITE_SPLIT.test(part)) return <Fragment key={i}>{part}</Fragment>;
-        CITE_SPLIT.lastIndex = 0;
-        const pages = (part.match(/\d+/g) ?? []).map(Number);
+        if (!IS_CITE.test(part)) return <Fragment key={i}>{part}</Fragment>;
+        const pages = Array.from(new Set(parseCitations(part)));
         return (
           <Fragment key={i}>
             {pages.map((p) => (

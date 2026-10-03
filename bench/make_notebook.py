@@ -10,7 +10,7 @@ cells = [
 # Filing Lens: DSPy verifier + cascade bench (Kaggle, GPU T4, Internet on)
 
 Inputs come from the cloud bench (`npm run bench`) on `main`: `bench/results/gen_inputs.jsonl`, which holds 150 FinanceBench
-questions × 3 sets (`own_doc` = gold answer, `off_doc` = Easy abstain, `gold_removed` = Hard abstain), with the exact
+questions × 3 sets (`own_doc` = gold answer, `off_doc` = Easy abstain from the same CV fold, `gold_removed` = Hard abstain with answer-leaking questions excluded), with the exact
 sentence snippets the browser builds, a company-grouped `split` (train / dev / test) and the feature gate's out-of-fold `p_gate_oof`.
 
 1. Serve **Qwen2.5-3B-Instruct fp16 with vLLM** (`dtype=\"half\"`; if vLLM won't start, llama.cpp on the fp16 GGUF) and compile the DSPy `Lens` program (verifier `Answerable` → `CitedAnswer`)
@@ -57,13 +57,14 @@ if not Path("bench/lens_program.py").exists():
         Path(Path(mod).name).write_text(fetch(mod))
 sys.path.insert(0, "bench" if Path("bench/lens_program.py").exists() else ".")
 import dspy
-from lens_program import Lens, metric, norm_page, to_example
+from lens_program import Lens, balanced_score, metric, norm_page, stratified, to_example
 import export_verifier
 
 rows = [json.loads(l) for l in fetch("bench/results/gen_inputs.jsonl").splitlines() if l.strip()]
 by_split = {s: [to_example(r) for r in rows if r["split"] == s] for s in ("train", "dev", "test")}
+by_split["train"] = stratified(by_split["train"])  # ANSWER/ABSTAIN interleaved so bootstrapping sees both
 if DRY_RUN:
-    by_split = {s: v[:6] for s, v in by_split.items()}
+    by_split = {s: stratified(v)[:6] for s, v in by_split.items()}
 elif LIMIT:
     by_split["test"] = by_split["test"][:LIMIT]
 print({s: len(v) for s, v in by_split.items()}, "| dspy", dspy.__version__)
@@ -111,19 +112,27 @@ dspy.configure(lm=lm)
 # Compile: BootstrapFewShot, 2 demos, train split (company-grouped, no leakage into dev/test)
 opt = dspy.BootstrapFewShot(metric=metric, max_bootstrapped_demos=2, max_labeled_demos=2)
 lens = opt.compile(Lens(), trainset=by_split["train"])
-evaluate = dspy.Evaluate(devset=by_split["dev"], metric=metric, num_threads=1 if DRY_RUN else 8, display_progress=False)
-score = lambda prog: float(getattr(evaluate(prog), "score", 0.0))
+
+def clean_answer_demos(prog):
+    # the answerer must only ever see demos that actually contain an answer
+    prog.answer.demos = [d for d in prog.answer.demos if (d.get("answer") or "").strip()]
+    return prog
+
+lens = clean_answer_demos(lens)
+# Balanced dev score = mean of per-class metric, so an always-ABSTAIN program scores 0.5 (raw dev is 2/3 abstain)
+score = lambda prog: balanced_score(prog, by_split["dev"])
 dev_bfs = score(lens)
 optimizer, dev_score = "BootstrapFewShot(2 demos)", dev_bfs
-print("dev metric, BootstrapFewShot:", dev_bfs)
+n_ans = sum(e.verdict == "ANSWER" for e in by_split["dev"])
+print(f"dev balanced metric, BootstrapFewShot: {dev_bfs:.3f} (ANSWER {n_ans}, ABSTAIN {len(by_split['dev']) - n_ans}); demos check/answer:", len(lens.check.demos), len(lens.answer.demos))
 """),
     code("""
 # Optional: MIPROv2 light, kept only if dev improves
 if RUN_MIPRO and time.time() - T0 < TIME_BUDGET_S * 0.5:
     mipro = dspy.MIPROv2(metric=metric, auto="light", max_bootstrapped_demos=2, max_labeled_demos=2, num_threads=8)
-    cand = mipro.compile(lens.deepcopy(), trainset=by_split["train"], valset=by_split["dev"])
+    cand = clean_answer_demos(mipro.compile(lens.deepcopy(), trainset=by_split["train"], valset=by_split["dev"]))
     dev_mipro = score(cand)
-    print("dev metric, MIPROv2 light:", dev_mipro)
+    print(f"dev balanced metric, MIPROv2 light: {dev_mipro:.3f}")
     if dev_mipro > dev_bfs:
         lens, optimizer, dev_score = cand, "BootstrapFewShot(2) -> MIPROv2 light", dev_mipro
 else:

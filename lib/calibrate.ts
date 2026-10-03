@@ -6,7 +6,7 @@ export interface DecisionModel {
   featureNames: string[];
   k: number; // retrieval depth the gate was trained with; the app must use the same
   tokenBudget: number; // max prompt tokens (system + question + chunks)
-  tokPerChar: number; // conservative tokens-per-character estimate (p99 over the bench corpus)
+  tokPerChar: number; // conservative tokens-per-character estimate: the max over bench prompts + 0.005
   mean: number[];
   std: number[];
   weights: number[];

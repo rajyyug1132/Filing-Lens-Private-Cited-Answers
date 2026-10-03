@@ -25,6 +25,7 @@ import { hydrate } from '../lib/index-doc';
 import { formatMessages, type PredictorSpec } from '../lib/dspy-chat';
 import { buildUserPrompt, fitToBudget, SYSTEM_PROMPT } from '../lib/prompt';
 import { selectSnippets } from '../lib/snippets';
+import { contentTerms } from '../lib/text';
 import { BASE_FEATURES, FEATURE_NAMES, features, retrieve, type DocIndex } from '../lib/retrieve';
 import { CACHE, FB_DIR, pagesFor } from './extract';
 import { renderRecallSvg, renderReliabilitySvg } from './plot';
@@ -64,6 +65,25 @@ async function docIndex(doc: string): Promise<DocIndex> {
   return hydrate(chunks, vectors);
 }
 
+// Does text still contain the answer? Numeric gold answers: every gold number
+// (years and single digits ignored) appears as a value in the text. Text gold
+// answers: >= 70% of their content terms appear (only when there are >= 5).
+const numsOf = (s: string) => (s.match(/\d[\d,]*\.?\d*/g) ?? []).map((x) => parseFloat(x.replace(/,/g, ''))).filter(Number.isFinite);
+function goldNumbers(ans: string): number[] {
+  return Array.from(new Set(numsOf(ans).filter((v) => !(Number.isInteger(v) && v >= 1900 && v <= 2100) && !(Number.isInteger(v) && v < 10))));
+}
+function answerLeaks(text: string, ans: string): 'numbers' | 'terms' | null {
+  const g = goldNumbers(ans);
+  if (g.length) {
+    const t = numsOf(text);
+    return g.every((v) => t.some((x) => Math.abs(x - v) < 0.01)) ? 'numbers' : null;
+  }
+  const terms = Array.from(new Set(contentTerms(ans)));
+  if (terms.length < 5) return null;
+  const have = new Set(contentTerms(text));
+  return terms.filter((w) => have.has(w)).length / terms.length >= 0.7 ? 'terms' : null;
+}
+
 // The same filing with the gold pages taken out (Set B / Hard).
 function withoutPages(idx: DocIndex, drop: Set<number>): DocIndex {
   const keep = idx.chunks.map((c, i) => [c, i] as const).filter(([c]) => !drop.has(c.page));
@@ -75,13 +95,18 @@ for (const r of rows)
   if (r.doc_name.endsWith('_10K')) docsByCompany.set(r.company, Array.from(new Set([...(docsByCompany.get(r.company) ?? []), r.doc_name])).sort());
 const companies = Array.from(new Set(rows.map((r) => r.company))).sort();
 const tenKCompanies = Array.from(docsByCompany.keys()).sort();
+// Off-document filings come from another company in the SAME CV fold (and so
+// the same train/dev/test split): no filing is ever scored in a fold whose
+// training set contains it (document-level leakage fix).
 function offDoc(r: Row, i: number): string {
-  const others = tenKCompanies.filter((c) => c !== r.company);
+  const f = foldOf.get(r.company);
+  const others = tenKCompanies.filter((c) => c !== r.company && foldOf.get(c) === f);
   const ds = docsByCompany.get(others[(i * 7) % others.length])!;
   return ds[i % ds.length];
 }
 
-// Company-grouped split for the DSPy compile on Kaggle: ~40% train, ~20% dev, ~40% test.
+// Folds by question company; the Kaggle split is a function of the fold (folds 0-1 train, 2 dev, 3-4 test).
+const foldOf = new Map(companies.map((c, i) => [c, i % FOLDS]));
 const splitOf = new Map(companies.map((c, i) => [c, i % 5 < 2 ? 'train' : i % 5 === 2 ? 'dev' : 'test']));
 
 const cacheIdx = new Map<string, DocIndex>();
@@ -136,17 +161,35 @@ console.log('recall', recallAtK, 'tokens', tokenStats, 'capped', capped, 'tokPer
 // ---- 2. instances at the chosen k --------------------------------------------
 const insts: Inst[] = [];
 const genInputs: Record<string, unknown>[] = [];
+const hardExcluded: { qid: string; reason: string }[] = [];
+let hardExtraPagesDropped = 0;
 for (const [i, r] of rows.entries()) {
   const gold = goldOf(r);
   const own = await getIdx(r.doc_name);
   for (const kind of ['own_doc', 'off_doc', 'gold_removed'] as const) {
     const doc = kind === 'off_doc' ? offDoc(r, i) : r.doc_name;
-    const idx = kind === 'own_doc' ? own : kind === 'gold_removed' ? withoutPages(own, gold) : await getIdx(doc);
+    let idx = own;
+    if (kind === 'off_doc') idx = await getIdx(doc);
+    if (kind === 'gold_removed') {
+      // Hard: drop the annotated gold pages AND any other page that already contains the answer
+      const drop = new Set(gold);
+      for (const c of own.chunks) if (!drop.has(c.page) && goldNumbers(r.answer).length && answerLeaks(c.text, r.answer)) drop.add(c.page);
+      hardExtraPagesDropped += drop.size - gold.size;
+      idx = withoutPages(own, drop);
+    }
     const a = performance.now();
     const [qv] = await embed([r.question]);
     const b = performance.now();
     const full = retrieve(idx, r.question, qv, K);
     const ret = { ...full, hits: fitToBudget(r.question, full.hits, TOKEN_BUDGET, TOK_PER_CHAR) };
+    if (kind === 'gold_removed') {
+      // a label is only trustworthy if the retrieved context no longer answers the question
+      const leak = answerLeaks(ret.hits.map((h) => h.chunk.text).join(' '), r.answer);
+      if (leak) {
+        hardExcluded.push({ qid: r.financebench_id, reason: leak });
+        continue;
+      }
+    }
     const c = performance.now();
     const x = features(idx, ret);
     const d = performance.now();
@@ -165,7 +208,6 @@ for (const [i, r] of rows.entries()) {
 }
 
 // ---- 3. cross-validated gates -------------------------------------------------
-const foldOf = new Map(companies.map((c, i) => [c, i % FOLDS]));
 
 function trainModel(train: Inst[], nFeat: number): DecisionModel {
   const cs = Array.from(new Set(train.map((t) => t.company))).sort();
@@ -277,10 +319,12 @@ const retLat = insts.map((t) => t.latRetrieveMs + t.latQueryEmbedMs);
 const strip = ({ bins, ...r }: ReturnType<typeof score>) => r;
 const summary = {
   dataset: 'FinanceBench open-source (patronus-ai/financebench), 150 questions, 84 filings',
-  sets: { answer: 150, easyAbstain: 150, hardAbstain: 150 },
+  sets: { answer: insts.filter((t) => t.kind === 'own_doc').length, easyAbstain: insts.filter((t) => t.kind === 'off_doc').length, hardAbstain: insts.filter((t) => t.kind === 'gold_removed').length },
   recallAtK,
   promptTokensAtK: tokenStats,
   cappedAtK: capped,
+  hardSet: { kept: insts.filter((t) => t.kind === 'gold_removed').length, excludedAnswerStillRetrieved: hardExcluded.length, excludedByReason: { numbers: hardExcluded.filter((h) => h.reason === 'numbers').length, terms: hardExcluded.filter((h) => h.reason === 'terms').length }, extraPagesDropped: hardExtraPagesDropped },
+  offDocPolicy: 'other company in the same CV fold (same split)',
   snippetRecall,
   verifierPromptTokens: verifierTokens,
   tokenBudget: TOKEN_BUDGET,
@@ -316,14 +360,14 @@ writeFileSync(
       { name: 'Calibrated LR gate: Easy set (answer + wrong company)', ece: shipped.easy.ece, bins: shipped.easy.bins },
       { name: 'Calibrated LR gate: Hard set (answer + gold pages removed)', ece: shipped.hard.ece, bins: shipped.hard.bins },
     ],
-    `n=${shipped.easy.n} per set`,
+    `Easy n=${shipped.easy.n}, Hard n=${shipped.hard.n}`,
   ),
 );
 writeFileSync('bench/results/recall.svg', renderRecallSvg(recallAtK, K, RECALL_TARGET, tokenStats, Object.fromEntries(K_CANDIDATES.map((k) => [k, capped[k].recall]))));
 
 // ---- 4. shipped model: train on everything ----------------------------------
 const finalModel = trainModel(insts, shippedFeat);
-finalModel.trainedOn = `FinanceBench open-source: 150 answer + 150 wrong-company + 150 gold-removed, k=${K}, ${useV2 ? 'v2' : 'v1'} features`;
+finalModel.trainedOn = `FinanceBench open-source: ${summary.sets.answer} answer + ${summary.sets.easyAbstain} wrong-company (same fold) + ${summary.sets.hardAbstain} gold-removed, k=${K}, ${useV2 ? 'v2' : 'v1'} features`;
 writeFileSync('lib/decision-model.json', JSON.stringify(finalModel, null, 2));
 
 // ---- 5. table -----------------------------------------------------------------
@@ -345,7 +389,8 @@ md += `\nWith the ${TOKEN_BUDGET}-token cap (drop lowest-ranked chunks; ${TOK_PE
 md += `\n**Shipped k = ${K}** (${kReason}).\n`;
 md += `\nSentence snippets (what the verifier reads, ≤2,200 chars): gold page present in ${(snippetRecall * 100).toFixed(1)}% of answer cases` +
   (verifierTokens ? `; verifier prompt with 2 worst-case demos: p95 ${verifierTokens.p95}, max ${verifierTokens.max} tokens.\n` : '.\n');
-md += `\nEach set: 150 answer + 150 abstain instances; one gate trained on all 450 with ${FOLDS}-fold CV grouped by company; Easy and Hard scored separately. ` +
+md += `\nHard set: annotated gold pages plus ${summary.hardSet.extraPagesDropped} other pages that still contained every gold number were removed; ${summary.hardSet.excludedAnswerStillRetrieved} questions were excluded because the retrieved context still contained the answer (${summary.hardSet.excludedByReason.numbers} by numbers, ${summary.hardSet.excludedByReason.terms} by answer terms), leaving ${summary.sets.hardAbstain}. Easy abstains use another company's 10-K from the same CV fold, so no filing crosses folds.\n`;
+md += `\nSets: ${summary.sets.answer} answer, ${summary.sets.easyAbstain} Easy, ${summary.sets.hardAbstain} Hard; one gate trained on all of them with ${FOLDS}-fold CV grouped by company; Easy and Hard scored separately. ` +
   `Retrieval (query embed + hybrid search) p50 ${L.queryEmbedPlusRetrieve.p50.toFixed(2)} ms, p95 ${L.queryEmbedPlusRetrieve.p95.toFixed(2)} ms on ${summary.machine}.\n`;
 writeFileSync('bench/results/table.md', md);
 console.log(md);

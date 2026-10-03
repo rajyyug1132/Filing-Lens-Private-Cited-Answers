@@ -8,8 +8,23 @@ const CACHE = 'filing-lens-v1';
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
+// Privacy counter: the service worker sees requests from the page AND its
+// workers (embedding, pdf.js, model runtimes), so any request carrying a body
+// is reported to open pages, which add it to the "doc bytes sent" counter.
+async function reportBody(req) {
+  let bytes = 0;
+  try {
+    bytes = (await req.clone().arrayBuffer()).byteLength;
+  } catch {
+    bytes = 1; // unreadable body: still flag it
+  }
+  const all = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+  for (const c of all) c.postMessage({ type: 'filing-lens:body', method: req.method, url: req.url, bytes });
+}
+
 self.addEventListener('fetch', (e) => {
   const req = e.request;
+  if (req.method !== 'GET' && req.method !== 'HEAD') e.waitUntil(reportBody(req));
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return; // model weights: browser/wllama cache handles them

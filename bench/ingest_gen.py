@@ -107,7 +107,7 @@ def main():
     for b in builds:
         V = {r["id"]: r for r in rows if r["build"] == b and r["id"] in inputs}
         if len(V) != len(inputs):
-            print(f"warning: build {b} covers {len(V)}/{len(inputs)} test instances")
+            raise SystemExit(f"build {b} covers {len(V)}/{len(inputs)} test instances (LIMIT run?); refusing to compare it with the full-split gate row")
         ids = [i for i in inputs if i in V]
         sub = {i: inputs[i] for i in ids}
         conf_v = {i: (V[i]["p_answer"] if V[i]["p_answer"] is not None else float(V[i]["verdict"] == "ANSWER")) for i in ids}
@@ -139,7 +139,12 @@ def main():
     if not builds:
         md += "| Verifier only (Qwen2.5-3B, DSPy-compiled) | pending (Kaggle) | pending (Kaggle) | pending | pending | pending | 100% |\n"
         md += f"| Cascade: gate → verifier | pending (Kaggle) | pending (Kaggle) | pending | pending | pending | {cascade_calls:.0f}% |\n"
-    md += (f"\nTest split only: {len(inputs)} instances (company-grouped; {sum(g['kind'] == 'own_doc' for g in inputs.values())} per set). "
+    n_own = sum(g['kind'] == 'own_doc' for g in inputs.values())
+    n_reach = sum(g['kind'] == 'own_doc' and any(p in g['gold_pages'] for p in g['snippet_pages']) for g in inputs.values())
+    metrics["answer_cases_with_gold_page_in_snippets"] = n_reach
+    md += (f"\nTest split only: {len(inputs)} instances (company-grouped): {n_own} answer, "
+           f"{sum(g['kind'] == 'off_doc' for g in inputs.values())} Easy, {sum(g['kind'] == 'gold_removed' for g in inputs.values())} Hard. "
+           f"Only {n_reach} of the {n_own} answer cases have a gold page in the snippets, which caps citation page match and answer accuracy. "
            f"Gate latency: features + LR on {bench['machine']}; verifier latency: one verifier call on the Kaggle T4 build named in the row. "
            f"Retrieval (shared by all rows) is not included.\n")
     (R / "cascade_table.md").write_text(md)

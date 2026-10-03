@@ -48,6 +48,18 @@ export async function checkWebGPU(): Promise<GpuCheck> {
   }
 }
 
+type Chunk = { choices?: { delta?: { content?: string | null } }[] };
+
+// Concatenate the delta text of an OpenAI-style chunk stream (WebLLM and wllama both yield these).
+export async function drainStream(stream: AsyncIterable<Chunk>, onText?: (t: string) => void): Promise<string> {
+  let text = '';
+  for await (const chunk of stream) {
+    text += chunk?.choices?.[0]?.delta?.content ?? '';
+    onText?.(text);
+  }
+  return text;
+}
+
 const GEN = { temperature: 0, top_p: 1 }; // greedy, as in the Kaggle eval
 
 export async function loadWebLLM(gpuCheck: GpuCheck, onProgress?: (p: LoadProgress) => void): Promise<Engine> {
@@ -61,12 +73,7 @@ export async function loadWebLLM(gpuCheck: GpuCheck, onProgress?: (p: LoadProgre
     label: 'Qwen2.5-3B on-device (WebGPU)',
     async chat(messages, maxTokens, onText) {
       const stream = await engine.chat.completions.create({ messages, stream: true, max_tokens: maxTokens, ...GEN });
-      let text = '';
-      for await (const chunk of stream) {
-        text += chunk.choices[0]?.delta?.content ?? '';
-        onText?.(text);
-      }
-      return text;
+      return drainStream(stream, onText);
     },
   };
 }
@@ -85,18 +92,9 @@ export async function loadWllama(onProgress?: (p: LoadProgress) => void): Promis
     id: 'wllama',
     label: 'Qwen2.5-1.5B on-device (WASM CPU)',
     async chat(messages, maxTokens, onText) {
-      let text = '';
-      const res = await w.createChatCompletion({
-        messages,
-        max_tokens: maxTokens,
-        stream: true,
-        onChunk: (c: any) => {
-          text += c?.choices?.[0]?.delta?.content ?? '';
-          onText?.(text);
-        },
-        ...GEN,
-      });
-      return text || res?.choices?.[0]?.message?.content || '';
+      // stream:true without onData returns an async iterator of OpenAI-style chunks
+      const stream = await w.createChatCompletion({ messages, max_tokens: maxTokens, stream: true, ...GEN });
+      return drainStream(stream, onText);
     },
   };
 }
