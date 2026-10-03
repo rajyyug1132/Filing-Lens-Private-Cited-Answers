@@ -72,7 +72,14 @@ export const FEATURE_NAMES = [
   'year_missing_ctx',
   'n_terms_log',
   'entity_missing_doc',
+  // v2: "does the top passage answer this kind of question?"
+  'numeric_q_top_numbers',
+  'year_in_top1',
 ] as const;
+
+export const BASE_FEATURES = 10; // v1 gate uses the first 10
+
+const NUMERIC_Q = /\b(how much|how many|amount|revenue|sales|income|earnings|eps|margin|ratio|cash|capex|capital expenditure|expense|cost|debt|liabilit|assets|dividend|growth|percent|%|usd|\$|millions?|billions?|turnover|days)\b/i;
 
 // Decision features. Each one is something the reader of a filing would also
 // check: does the best passage match, do the question's words appear in the
@@ -98,6 +105,12 @@ export function features(index: DocIndex, r: Retrieval): number[] {
   const bm25Norm = idfSum > 0 ? r.bm25Top / (idfSum * 2.2) : 0;
   const ys = years(terms.join(' '));
   const yearMissing = ys.length ? ys.filter((y) => !ctxText.includes(y)).length / ys.length : 0;
+  const top = r.hits[0]?.chunk.text ?? '';
+  const numericQ = NUMERIC_Q.test(r.query) ? 1 : 0;
+  const topWords = Math.max(1, top.split(/\s+/).length);
+  const topNumbers = (top.match(/\$?\(?\d[\d,]*\.?\d*\)?%?/g) ?? []).filter((t) => t.replace(/\D/g, '').length >= 2).length;
+  const qYears = years(r.query);
+  const yearInTop1 = qYears.length ? qYears.filter((y) => top.includes(y)).length / qYears.length : 0.5;
   const ents = properNouns(r.query);
   const entityMissing = ents.length ? ents.filter((e) => !index.vocab.has(e)).length / ents.length : 0;
   return [
@@ -111,5 +124,7 @@ export function features(index: DocIndex, r: Retrieval): number[] {
     yearMissing,
     Math.log(1 + terms.length),
     entityMissing,
+    numericQ * Math.min(1, topNumbers / (0.15 * topWords)),
+    yearInTop1,
   ];
 }

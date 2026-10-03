@@ -1,4 +1,0 @@
-{
-  "status": "pending",
-  "reason": "bench/results/gen_results.jsonl not found; run bench/kaggle_gen.ipynb on Kaggle"
-}

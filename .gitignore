@@ -9,3 +9,5 @@ playwright-report
 next-env.d.ts
 public/vendor
 public/models
+__pycache__/
+bench/results/kaggle/

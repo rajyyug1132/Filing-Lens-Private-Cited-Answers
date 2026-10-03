@@ -1,12 +1,15 @@
-import { splitSentences } from './cite';
+import type { ChatMessage } from './dspy-chat';
 import { BASE, importUrl } from './env';
-import type { Hit } from './retrieve';
+import type { Snippet } from './snippets';
 import { contentTerms } from './text';
 
+// An LLM engine takes the exact ChatAdapter messages (lib/dspy-chat.ts) and
+// returns the raw completion. The extractive engine has no model: the pipeline
+// skips the verifier and quotes snippets instead.
 export interface Engine {
   id: 'webllm' | 'wllama' | 'fixture' | 'extractive';
   label: string;
-  generate(system: string, user: string, hits: Hit[], question: string, onText?: (t: string) => void): Promise<string>;
+  chat?(messages: ChatMessage[], maxTokens: number, onText?: (t: string) => void): Promise<string>;
 }
 
 export interface LoadProgress {
@@ -45,7 +48,7 @@ export async function checkWebGPU(): Promise<GpuCheck> {
   }
 }
 
-const GEN = { max_tokens: 200, temperature: 0.1, top_p: 0.9 };
+const GEN = { temperature: 0, top_p: 1 }; // greedy, as in the Kaggle eval
 
 export async function loadWebLLM(gpuCheck: GpuCheck, onProgress?: (p: LoadProgress) => void): Promise<Engine> {
   const { CreateMLCEngine } = await import('@mlc-ai/web-llm');
@@ -56,15 +59,8 @@ export async function loadWebLLM(gpuCheck: GpuCheck, onProgress?: (p: LoadProgre
   return {
     id: 'webllm',
     label: 'Qwen2.5-3B on-device (WebGPU)',
-    async generate(system, user, _hits, _q, onText) {
-      const stream = await engine.chat.completions.create({
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
-        stream: true,
-        ...GEN,
-      });
+    async chat(messages, maxTokens, onText) {
+      const stream = await engine.chat.completions.create({ messages, stream: true, max_tokens: maxTokens, ...GEN });
       let text = '';
       for await (const chunk of stream) {
         text += chunk.choices[0]?.delta?.content ?? '';
@@ -88,13 +84,11 @@ export async function loadWllama(onProgress?: (p: LoadProgress) => void): Promis
   return {
     id: 'wllama',
     label: 'Qwen2.5-1.5B on-device (WASM CPU)',
-    async generate(system, user, _hits, _q, onText) {
+    async chat(messages, maxTokens, onText) {
       let text = '';
       const res = await w.createChatCompletion({
-        messages: [
-          { role: 'system', content: system },
-          { role: 'user', content: user },
-        ],
+        messages,
+        max_tokens: maxTokens,
         stream: true,
         onChunk: (c: any) => {
           text += c?.choices?.[0]?.delta?.content ?? '';
@@ -107,42 +101,44 @@ export async function loadWllama(onProgress?: (p: LoadProgress) => void): Promis
   };
 }
 
-// Test stub: replays responses from a fixture file keyed by question. Used by
-// the Playwright suite (?engine=fixture), so tests exercise the real
+// Test stub: replays recorded ChatAdapter completions keyed by question and
+// predictor (check = verifier, answer = cited answerer). Used by the Playwright
+// suite (?engine=fixture), so tests run the real gate, prompt builder, parser,
 // citation check and abstain paths without a 2 GB download.
 export async function loadFixtureEngine(): Promise<Engine> {
   const res = await fetch(`${BASE}/fixtures/recorded-responses.json`);
-  const data = (await res.json()) as { source: string; responses: Record<string, string> };
+  const data = (await res.json()) as { source: string; responses: Record<string, { check: string; answer?: string }> };
   const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const table = new Map(Object.entries(data.responses).map(([q, a]) => [norm(q), a]));
+  const ABSTAIN = '[[ ## verdict ## ]]\nABSTAIN\n\n[[ ## evidence_page ## ]]\nNONE\n\n[[ ## completed ## ]]';
   return {
     id: 'fixture',
     label: `Recorded responses (${data.source})`,
-    async generate(_s, _u, _h, question, onText) {
-      const a = table.get(norm(question)) ?? 'NOT IN DOCUMENT';
-      onText?.(a);
-      return a;
+    async chat(messages, _max, onText) {
+      const last = messages[messages.length - 1].content;
+      const q = last.match(/\[\[ ## question ## \]\]\n([^\n]*)/)?.[1] ?? '';
+      const isCheck = messages[0].content.includes('`evidence_page`');
+      const rec = table.get(norm(q));
+      const out = isCheck ? (rec?.check ?? ABSTAIN) : (rec?.answer ?? '[[ ## answer ## ]]\n\n[[ ## completed ## ]]');
+      onText?.(out);
+      return out;
     },
   };
 }
 
-// No-model fallback: quotes the best-matching sentences verbatim, each tagged
-// with its page. Labelled as such in the UI.
-export const extractiveEngine: Engine = {
-  id: 'extractive',
-  label: 'Extractive preview (no model downloaded)',
-  async generate(_s, _u, hits, question) {
-    const q = new Set(contentTerms(question));
-    const scored = hits.flatMap((h, rank) =>
-      splitSentences(h.chunk.text).map((s) => {
-        const terms = contentTerms(s);
-        const overlap = terms.filter((t) => q.has(t)).length;
-        return { s, page: h.chunk.page, score: overlap / Math.sqrt(1 + terms.length) - rank * 0.01 };
-      }),
-    );
-    scored.sort((a, b) => b.score - a.score);
-    const best = scored.filter((x) => x.score > 0).slice(0, 2);
-    if (!best.length) return 'NOT IN DOCUMENT';
-    return best.map((b) => `${b.s.length > 320 ? b.s.slice(0, 317) + '…' : b.s} [p.${b.page}]`).join(' ');
-  },
-};
+// No-model fallback (gate only, no verifier): quotes the two snippets that
+// overlap the question most, each tagged with its page. Labelled in the UI.
+export const extractiveEngine: Engine = { id: 'extractive', label: 'Extractive preview (no model downloaded)' };
+
+export function extractiveAnswer(question: string, snippets: Snippet[]): string {
+  const q = new Set(contentTerms(question));
+  const best = snippets
+    .map((s, i) => {
+      const terms = contentTerms(s.text);
+      return { s, score: terms.filter((t) => q.has(t)).length / Math.sqrt(1 + terms.length) - i * 0.001 };
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 2);
+  return best.map(({ s }) => `${s.text} [p.${s.page}]`).join(' ');
+}

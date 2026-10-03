@@ -7,154 +7,220 @@ code = lambda s: {"cell_type": "code", "metadata": {}, "execution_count": None, 
 
 cells = [
     md("""
-# Filing Lens: generation bench (Kaggle T4)
+# Filing Lens: DSPy verifier + cascade bench (Kaggle, GPU T4, Internet on)
 
-Runs **Qwen2.5-3B-Instruct Q4_K_M (GGUF, llama.cpp)** on the exact retrieved pages and prompt the browser app uses
-(`bench/results/gen_inputs.jsonl`, `bench/results/prompt.json`, both written by the cloud bench `npm run bench`).
+Inputs come from the cloud bench (`npm run bench`) on `main`: `bench/results/gen_inputs.jsonl`, which holds 150 FinanceBench
+questions × 3 sets (`own_doc` = gold answer, `off_doc` = Easy abstain, `gold_removed` = Hard abstain), with the exact
+sentence snippets the browser builds, a company-grouped `split` (train / dev / test) and the feature gate's out-of-fold `p_gate_oof`.
 
-Arms, one row per (instance, arm) in `gen_results.jsonl`:
-- `answer`: generate an answer with `[p.N]` citations for every instance (no gate). Gated arms (calibrated LR, logprob threshold) are applied afterwards by `bench/ingest_gen.py`.
-- `llm_router`: the same 3B model asked "can these excerpts answer the question? YES/NO". Its P(YES) from token logprobs is the router confidence.
-- `jev`: **[ASK: what is Jev + can it run locally]**, not implemented.
+1. Serve **Qwen2.5-3B-Instruct fp16 with vLLM** and compile the DSPy `Lens` program (verifier `Answerable` → `CitedAnswer`)
+   with `BootstrapFewShot` (2 demos) on the train split. Optionally try **MIPROv2 auto="light"** and keep it only if dev improves.
+2. Evaluate the compiled program on the test split with the **fp16 build** and with a **GGUF Q4_K_M build (llama.cpp)**, the
+   quantisation closest to the phone. Each call uses exactly the messages DSPy's ChatAdapter renders, which are also what the browser sends.
+3. Write `cascade_results.jsonl`, `verifier.json` (DSPy save) and `app_verifier.json` (→ commit as `app/prompts/verifier.json`).
 
-Set `DRY_RUN = True` to run every cell top-to-bottom on CPU with a stub model, no downloads (used to check the notebook in CI).
+`DRY_RUN=1` runs every cell on CPU with a stub LM and no downloads.
 """),
     code("""
-import json, os, re, sys, time, statistics, urllib.request
+import json, math, os, re, subprocess, sys, time, urllib.request
 from pathlib import Path
 
-DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"   # set True to smoke-test without a GPU or model download
-LIMIT = int(os.environ.get("LIMIT", "0")) or None  # e.g. 20 for a quick partial run
-REPO_RAW = os.environ.get("REPO_RAW", "https://raw.githubusercontent.com/rajyyug1132/Filing-Lens-Private-Cited-Answers/claude/charming-keller-fo4et8")
+DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
+RUN_MIPRO = os.environ.get("RUN_MIPRO", "1") == "1" and not DRY_RUN
+TIME_BUDGET_S = float(os.environ.get("TIME_BUDGET_S", 4 * 3600))  # skip optional work (MIPROv2) past half of this
+LIMIT = int(os.environ.get("LIMIT", "0")) or None                  # cap test instances for a quick run
+REPO_RAW = os.environ.get("REPO_RAW", "https://raw.githubusercontent.com/rajyyug1132/Filing-Lens-Private-Cited-Answers/main")
+HF_MODEL = "Qwen/Qwen2.5-3B-Instruct"
 GGUF_REPO, GGUF_FILE = "Qwen/Qwen2.5-3B-Instruct-GGUF", "qwen2.5-3b-instruct-q4_k_m.gguf"
-OUT = Path(os.environ.get("OUT_DIR", "/kaggle/working" if Path("/kaggle/working").exists() else "bench/results")) / "gen_results.jsonl"
-print({"DRY_RUN": DRY_RUN, "LIMIT": LIMIT, "OUT": str(OUT)})
-"""),
-    code("""
-def load_jsonl_or_json(name):
-    # local repo checkout first (dry run / CI), then the pushed branch on GitHub
-    for p in [Path("bench/results") / name, Path("/kaggle/input/filing-lens") / name]:
-        if p.exists():
-            txt = p.read_text()
-            break
-    else:
-        txt = urllib.request.urlopen(f"{REPO_RAW}/bench/results/{name}", timeout=60).read().decode()
-    return json.loads(txt) if name.endswith(".json") else [json.loads(l) for l in txt.splitlines() if l.strip()]
-
-prompt = load_jsonl_or_json("prompt.json")
-inputs = load_jsonl_or_json("gen_inputs.jsonl")
-if DRY_RUN:
-    inputs = inputs[:6]
-elif LIMIT:
-    inputs = inputs[:LIMIT]
-print(len(inputs), "instances;", sum(i["kind"] == "own_doc" for i in inputs), "gold-answer")
+OUT = Path(os.environ.get("OUT_DIR", "/kaggle/working" if Path("/kaggle/working").exists() else "bench/results/kaggle"))
+OUT.mkdir(parents=True, exist_ok=True)
+T0 = time.time()
+print({"DRY_RUN": DRY_RUN, "RUN_MIPRO": RUN_MIPRO, "OUT": str(OUT)})
 """),
     code("""
 if not DRY_RUN:
-    import subprocess
-    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "huggingface_hub"], check=True)
-    # Try prebuilt CUDA wheels first (fast), then fall back to building with CUDA (~15-20 min).
-    ok = False
-    for cu in ("cu124", "cu121"):
-        r = subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--only-binary=:all:", "llama-cpp-python",
-                            "--extra-index-url", f"https://abetlen.github.io/llama-cpp-python/whl/{cu}"])
-        if r.returncode == 0:
-            ok = True
-            break
-    if not ok:
-        env = dict(os.environ, CMAKE_ARGS="-DGGML_CUDA=on", FORCE_CMAKE="1")
-        subprocess.run([sys.executable, "-m", "pip", "install", "-q", "--no-cache-dir", "llama-cpp-python"], check=True, env=env)
+    pip = lambda *a, **kw: subprocess.run([sys.executable, "-m", "pip", "install", "-q", *a], **kw)
+    pip("dspy", "vllm", "huggingface_hub", "openai", check=True)
+    ok = any(pip("--only-binary=:all:", "llama-cpp-python[server]", "--extra-index-url",
+                 f"https://abetlen.github.io/llama-cpp-python/whl/{cu}").returncode == 0 for cu in ("cu124", "cu121"))
+    if not ok:  # no prebuilt CUDA wheel: build it (~15-20 min)
+        pip("--no-cache-dir", "llama-cpp-python[server]", check=True, env=dict(os.environ, CMAKE_ARGS="-DGGML_CUDA=on", FORCE_CMAKE="1"))
 """),
     code("""
-class StubLLM:
-    \"\"\"Dry-run stand-in with llama_cpp's create_chat_completion shape.\"\"\"
-    def create_chat_completion(self, messages, max_tokens=200, logprobs=False, top_logprobs=None, **kw):
-        user = messages[-1]["content"]
-        pages = re.findall(r"\\[p\\.(\\d+)\\]", user)
-        if max_tokens == 1:
-            text, lp = "YES", {"content": [{"token": "YES", "logprob": -0.4, "top_logprobs": [{"token": "YES", "logprob": -0.4}, {"token": "NO", "logprob": -1.1}]}]}
-        else:
-            text, lp = f"Stub answer [p.{pages[0] if pages else 1}].", {"content": [{"token": "x", "logprob": -0.2}] * 5}
-        return {"choices": [{"message": {"content": text}, "logprobs": lp}], "usage": {"completion_tokens": 5 if max_tokens > 1 else 1}}
+def fetch(rel):
+    \"\"\"Repo file: local checkout first (dry run / CI), else the main branch on GitHub.\"\"\"
+    p = Path(rel)
+    return p.read_text() if p.exists() else urllib.request.urlopen(f"{REPO_RAW}/{rel}", timeout=60).read().decode()
+
+if not Path("bench/lens_program.py").exists():
+    for mod in ("bench/lens_program.py", "bench/export_verifier.py"):
+        Path(Path(mod).name).write_text(fetch(mod))
+sys.path.insert(0, "bench" if Path("bench/lens_program.py").exists() else ".")
+import dspy
+from lens_program import Lens, metric, norm_page, to_example
+import export_verifier
+
+rows = [json.loads(l) for l in fetch("bench/results/gen_inputs.jsonl").splitlines() if l.strip()]
+by_split = {s: [to_example(r) for r in rows if r["split"] == s] for s in ("train", "dev", "test")}
+if DRY_RUN:
+    by_split = {s: v[:6] for s, v in by_split.items()}
+elif LIMIT:
+    by_split["test"] = by_split["test"][:LIMIT]
+print({s: len(v) for s, v in by_split.items()}, "| dspy", dspy.__version__)
+"""),
+    code("""
+def start_server(cmd, port, name):
+    log = open(OUT / f"{name}.log", "w")
+    proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT)
+    for _ in range(180):
+        try:
+            urllib.request.urlopen(f"http://localhost:{port}/v1/models", timeout=5)
+            return proc
+        except Exception:
+            if proc.poll() is not None:
+                raise RuntimeError(f"{name} exited; see {OUT}/{name}.log")
+            time.sleep(10)
+    raise RuntimeError(f"{name} did not come up")
 
 if DRY_RUN:
-    llm = StubLLM()
+    from dspy.utils.dummies import DummyLM
+    lm = DummyLM({"## evidence_page ##": {"verdict": "ANSWER", "evidence_page": "p.1"}, "## answer ##": {"answer": "Stub [p.1]."}})
+    vllm = None
 else:
-    from huggingface_hub import hf_hub_download
-    from llama_cpp import Llama
-    path = hf_hub_download(GGUF_REPO, GGUF_FILE)
-    llm = Llama(model_path=path, n_gpu_layers=-1, n_ctx=4096, logits_all=True, verbose=False, seed=0)
-print(type(llm).__name__)
+    vllm = start_server([sys.executable, "-m", "vllm.entrypoints.openai.api_server", "--model", HF_MODEL, "--served-model-name", "qwen2.5-3b",
+                         "--dtype", "half", "--max-model-len", "4096", "--gpu-memory-utilization", "0.85", "--port", "8000"], 8000, "vllm")
+    lm = dspy.LM("openai/qwen2.5-3b", api_base="http://localhost:8000/v1", api_key="x", temperature=0.0, max_tokens=256)
+dspy.configure(lm=lm)
 """),
     code("""
-CITE_RE = re.compile(r"\\[\\s*(?:p(?:age|g)?\\.?\\s*)(\\d+(?:\\s*[,;\\u2013-]\\s*(?:p(?:age|g)?\\.?\\s*)?\\d+)*)\\s*\\]", re.I)
+# Compile: BootstrapFewShot, 2 demos, train split (company-grouped, no leakage into dev/test)
+opt = dspy.BootstrapFewShot(metric=metric, max_bootstrapped_demos=2, max_labeled_demos=2)
+lens = opt.compile(Lens(), trainset=by_split["train"])
+evaluate = dspy.Evaluate(devset=by_split["dev"], metric=metric, num_threads=1 if DRY_RUN else 8, display_progress=False)
+score = lambda prog: float(getattr(evaluate(prog), "score", 0.0))
+dev_bfs = score(lens)
+optimizer, dev_score = "BootstrapFewShot(2 demos)", dev_bfs
+print("dev metric, BootstrapFewShot:", dev_bfs)
+"""),
+    code("""
+# Optional: MIPROv2 light, kept only if dev improves
+if RUN_MIPRO and time.time() - T0 < TIME_BUDGET_S * 0.5:
+    mipro = dspy.MIPROv2(metric=metric, auto="light", max_bootstrapped_demos=2, max_labeled_demos=2, num_threads=8)
+    cand = mipro.compile(lens.deepcopy(), trainset=by_split["train"], valset=by_split["dev"])
+    dev_mipro = score(cand)
+    print("dev metric, MIPROv2 light:", dev_mipro)
+    if dev_mipro > dev_bfs:
+        lens, optimizer, dev_score = cand, "BootstrapFewShot(2) -> MIPROv2 light", dev_mipro
+else:
+    print("MIPROv2 skipped (dry run, disabled, or out of time)")
+lens.save(str(OUT / "verifier.json"))
+print("kept:", optimizer, "| dev", dev_score, "| demos", len(lens.check.demos), len(lens.answer.demos))
+"""),
+    code("""
+# Evaluation calls mirror the browser: ChatAdapter-rendered messages, one raw chat call per predictor.
+from dspy.adapters import ChatAdapter
+adapter = ChatAdapter()
 
-def cited_pages(text):
+def p_answer_from_logprobs(content):
+    \"\"\"P(ANSWER) at the first non-blank token after the verdict header: mass on tokens starting AN.. vs AB..\"\"\"
+    seen, text = False, ""
+    for tok in content or []:
+        text += tok["token"]
+        if not seen:
+            seen = "## verdict ## ]]" in text
+            continue
+        if not tok["token"].strip():
+            continue
+        pa = sum(math.exp(t["logprob"]) for t in tok["top_logprobs"] if t["token"].strip().upper().startswith("AN"))
+        pb = sum(math.exp(t["logprob"]) for t in tok["top_logprobs"] if t["token"].strip().upper().startswith("AB"))
+        return pa / (pa + pb) if pa + pb > 0 else None
+    return None
+
+def call(client, model, messages, max_tokens):
+    if client is None:  # dry-run stub with the same response shape
+        is_check = "evidence_page" in messages[0]["content"]
+        txt = ("[[ ## verdict ## ]]\\nANSWER\\n\\n[[ ## evidence_page ## ]]\\np.1\\n\\n[[ ## completed ## ]]" if is_check
+               else "[[ ## answer ## ]]\\nStub [p.1].\\n\\n[[ ## completed ## ]]")
+        lp = [{"token": "[[ ## verdict ## ]]\\n", "logprob": 0.0, "top_logprobs": []},
+              {"token": "ANSWER", "logprob": -0.1, "top_logprobs": [{"token": "ANSWER", "logprob": -0.1}, {"token": "AB", "logprob": -2.4}]}]
+        return txt, lp, {"prompt_tokens": None, "completion_tokens": 12}
+    r = client.chat.completions.create(model=model, messages=messages, temperature=0.0, max_tokens=max_tokens, logprobs=True, top_logprobs=5)
+    c = r.choices[0]
+    lp = [{"token": t.token, "logprob": t.logprob, "top_logprobs": [{"token": x.token, "logprob": x.logprob} for x in t.top_logprobs]}
+          for t in (c.logprobs.content if c.logprobs and c.logprobs.content else [])]
+    return c.message.content or "", lp, {"prompt_tokens": r.usage.prompt_tokens, "completion_tokens": r.usage.completion_tokens}
+
+def parse(sig, text):
+    try:
+        return adapter.parse(sig, text)
+    except Exception:
+        return {}
+
+CITE_RE = re.compile(r"\\[\\s*(?:p(?:age|g)?\\.?\\s*)(\\d+)")
+
+def run_build(build, client, model):
     out = []
-    for m in CITE_RE.finditer(text):
-        out += [int(re.sub(r"\\D", "", n)) for n in re.split(r"[,;\\u2013-]", m.group(1)) if re.sub(r"\\D", "", n)]
+    for ex in by_split["test"]:
+        inp = {"question": ex.question, "snippets": ex.snippets}
+        t = time.perf_counter()
+        txt, lp, use = call(client, model, adapter.format(lens.check.signature, lens.check.demos, inp), 40)
+        t_check = time.perf_counter() - t
+        v = parse(lens.check.signature, txt)
+        verdict = "ANSWER" if (v.get("verdict") or "").strip().upper() == "ANSWER" else "ABSTAIN"
+        row = {"id": ex.id, "kind": ex.kind, "build": build, "verdict": verdict, "evidence_page": norm_page(v.get("evidence_page")),
+               "p_answer": p_answer_from_logprobs(lp), "latency_check_s": t_check, "prompt_tokens_check": use["prompt_tokens"],
+               "answer": "", "cited_pages": [], "latency_answer_s": None, "tokens_per_s": None, "parse_ok": bool(v)}
+        if verdict == "ANSWER":
+            t = time.perf_counter()
+            txt, _, use = call(client, model, adapter.format(lens.answer.signature, lens.answer.demos, inp), 200)
+            dt = time.perf_counter() - t
+            a = parse(lens.answer.signature, txt).get("answer") or ""
+            row.update(answer=a, cited_pages=[int(n) for n in CITE_RE.findall(a)], latency_answer_s=dt,
+                       tokens_per_s=(use["completion_tokens"] or 0) / dt if dt > 0 else None)
+        out.append(row)
     return out
 
-def user_prompt(inst):
-    ctx = prompt["excerpt_joiner"].join(prompt["excerpt_format"].format(page=h["page"], text=h["text"]) for h in inst["hits"])
-    return prompt["user_template"].replace("[p.0] {text}", ctx).replace("{question}", inst["question"])
-
-ROUTER_SYSTEM = "You check whether excerpts from a company filing contain the answer to a question. Reply with exactly one word: YES or NO."
-
-def run_answer(inst):
-    msgs = [{"role": "system", "content": prompt["system"]}, {"role": "user", "content": user_prompt(inst)}]
-    t = time.perf_counter()
-    r = llm.create_chat_completion(messages=msgs, max_tokens=200, temperature=0.0, logprobs=True, top_logprobs=1)
-    dt = time.perf_counter() - t
-    text = r["choices"][0]["message"]["content"].strip()
-    lps = [c["logprob"] for c in ((r["choices"][0].get("logprobs") or {}).get("content") or [])]
-    ntok = r.get("usage", {}).get("completion_tokens") or len(lps)
-    return {"arm": "answer", "answer": text, "cited_pages": cited_pages(text), "refused": prompt["refusal"] in text.upper(),
-            "latency_s": dt, "completion_tokens": ntok, "tokens_per_s": ntok / dt if dt > 0 else None,
-            "logprob_conf": (2.718281828 ** (sum(lps) / len(lps))) if lps else None}
-
-def run_router(inst):
-    ctx = user_prompt(inst).rsplit("\\nAnswer with", 1)[0]
-    msgs = [{"role": "system", "content": ROUTER_SYSTEM}, {"role": "user", "content": ctx + "\\nCan the excerpts answer the question? YES or NO:"}]
-    t = time.perf_counter()
-    r = llm.create_chat_completion(messages=msgs, max_tokens=1, temperature=0.0, logprobs=True, top_logprobs=10)
-    dt = time.perf_counter() - t
-    tops = (((r["choices"][0].get("logprobs") or {}).get("content") or [{}])[0]).get("top_logprobs") or []
-    import math
-    p = {"YES": 0.0, "NO": 0.0}
-    for tl in tops:
-        k = tl["token"].strip().upper()
-        if k in p:
-            p[k] += math.exp(tl["logprob"])
-    p_yes = p["YES"] / (p["YES"] + p["NO"]) if (p["YES"] + p["NO"]) > 0 else None
-    return {"arm": "llm_router", "answer": r["choices"][0]["message"]["content"].strip(), "p_yes": p_yes, "latency_s": dt}
+results = []
+if DRY_RUN:
+    results += run_build("dry_run_stub", None, None)
+else:
+    from openai import OpenAI
+    results += run_build("vllm_fp16", OpenAI(base_url="http://localhost:8000/v1", api_key="x"), "qwen2.5-3b")
+print(len(results), "rows so far")
 """),
     code("""
-OUT.parent.mkdir(parents=True, exist_ok=True)
-rows = []
-t0 = time.time()
-with OUT.open("w") as f:
-    for i, inst in enumerate(inputs):
-        for fn in (run_answer, run_router):
-            row = {"id": inst["id"], "qid": inst["qid"], "kind": inst["kind"], "model": "stub" if DRY_RUN else f"{GGUF_REPO}/{GGUF_FILE}", **fn(inst)}
-            rows.append(row)
-            f.write(json.dumps(row) + "\\n")
-        if i % 25 == 0:
-            print(i, f"{time.time() - t0:.0f}s")
-ans = [r for r in rows if r["arm"] == "answer"]
-tps = [r["tokens_per_s"] for r in ans if r["tokens_per_s"]]
-print(f"wrote {len(rows)} rows to {OUT}; median tokens/s {statistics.median(tps):.1f}" if tps else f"wrote {len(rows)} rows")
+# Same compiled program on the quantised GGUF Q4_K_M build (llama.cpp), closest to what the phone runs
+if not DRY_RUN:
+    vllm.terminate(); vllm.wait(timeout=120)
+    from huggingface_hub import hf_hub_download
+    from openai import OpenAI
+    gguf = hf_hub_download(GGUF_REPO, GGUF_FILE)
+    llama = start_server([sys.executable, "-m", "llama_cpp.server", "--model", gguf, "--model_alias", "qwen2.5-3b-q4",
+                          "--n_gpu_layers", "-1", "--n_ctx", "4096", "--port", "8001"], 8001, "llamacpp")
+    results += run_build("gguf_q4", OpenAI(base_url="http://localhost:8001/v1", api_key="x"), "qwen2.5-3b-q4")
+    llama.terminate()
+
+with (OUT / "cascade_results.jsonl").open("w") as f:
+    for r in results:
+        f.write(json.dumps({**r, "model": "stub" if DRY_RUN else HF_MODEL, "optimizer": optimizer, "dev_metric": dev_score}) + "\\n")
+
+refs = [{"question": e.question, "snippets": e.snippets} for e in by_split["test"][:2]]
+export_verifier.export(lens, OUT / "app_verifier.json", refs,
+                       {"compiled": not DRY_RUN, "model": "stub (dry run)" if DRY_RUN else f"{HF_MODEL} fp16 via vLLM",
+                        "optimizer": optimizer, "dev_metric": dev_score})
+print("wrote", OUT / "cascade_results.jsonl", OUT / "verifier.json", OUT / "app_verifier.json", f"| {time.time() - T0:.0f}s")
 """),
     md("""
-**Next:** download `gen_results.jsonl` from the notebook's Output tab, commit it to `bench/results/gen_results.jsonl`, then run
-`python bench/ingest_gen.py` (or tell Claude "ingest").
+**Next:** from the notebook's Output tab download `cascade_results.jsonl`, `app_verifier.json` and `verifier.json`, then
+`cp app_verifier.json app/prompts/verifier.json`, `cp cascade_results.jsonl verifier.json bench/results/`, run
+`python bench/ingest_gen.py` and `npm test` (the prompt-equality test checks the browser rebuilds the compiled prompts exactly).
+Or push them and tell Claude "ingest".
 """),
 ]
-
+for i, c in enumerate(cells):
+    c["id"] = f"cell-{i}"
 nb = {"cells": cells, "metadata": {"kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
       "language_info": {"name": "python"}, "kaggle": {"accelerator": "nvidiaTeslaT4", "isInternetEnabled": True}},
       "nbformat": 4, "nbformat_minor": 5}
-for i, c in enumerate(cells):
-    c["id"] = f"cell-{i}"
 Path("bench/kaggle_gen.ipynb").write_text(json.dumps(nb, indent=1))
 print("wrote bench/kaggle_gen.ipynb")

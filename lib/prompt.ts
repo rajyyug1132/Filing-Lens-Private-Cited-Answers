@@ -13,3 +13,17 @@ export function buildUserPrompt(question: string, hits: Hit[]): string {
 }
 
 export const REFUSAL = 'NOT IN DOCUMENT';
+
+// Keep the highest-ranked hits whose prompt fits the token budget, estimated
+// from characters with a conservative tokens-per-character ratio measured in
+// the bench (the browser has no Qwen tokenizer). Always keeps at least one hit.
+export function fitToBudget(question: string, hits: Hit[], budget: number, tokPerChar: number): Hit[] {
+  const kept: Hit[] = [];
+  for (const h of hits) {
+    const next = [...kept, h];
+    const chars = SYSTEM_PROMPT.length + buildUserPrompt(question, next).length;
+    if (kept.length && chars * tokPerChar > budget) break;
+    kept.push(h);
+  }
+  return kept;
+}

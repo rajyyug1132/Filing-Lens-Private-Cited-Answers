@@ -4,6 +4,9 @@
 
 export interface DecisionModel {
   featureNames: string[];
+  k: number; // retrieval depth the gate was trained with; the app must use the same
+  tokenBudget: number; // max prompt tokens (system + question + chunks)
+  tokPerChar: number; // conservative tokens-per-character estimate (p99 over the bench corpus)
   mean: number[];
   std: number[];
   weights: number[];
@@ -30,12 +33,20 @@ export function logit(m: Pick<DecisionModel, 'mean' | 'std' | 'weights' | 'bias'
   return z;
 }
 
+// x may carry more features than the model uses (feature sets are prefixes).
 export function predict(m: DecisionModel, x: number[]): number {
-  return sigmoid(logit(m, x) / m.temperature);
+  return sigmoid(logit(m, x.slice(0, m.weights.length)) / m.temperature);
 }
 
-// Full-batch gradient descent with L2. Small data, so this converges fine.
-export function fitLogistic(X: number[][], y: number[], l2 = 1e-2, iters = 3000, lr = 0.1) {
+// Class weights that make the effective prior 50/50 (training sets can be 1:2).
+export function balancedWeights(y: number[]): number[] {
+  const pos = y.filter((v) => v === 1).length;
+  const neg = y.length - pos;
+  return y.map((v) => (v === 1 ? y.length / (2 * pos) : y.length / (2 * neg)));
+}
+
+// Full-batch gradient descent with L2 and optional sample weights.
+export function fitLogistic(X: number[][], y: number[], l2 = 1e-2, iters = 3000, lr = 0.1, sw: number[] = y.map(() => 1)) {
   const { mean, std } = standardize(X);
   const Z = X.map((x) => x.map((v, j) => (v - mean[j]) / std[j]));
   const d = Z[0].length;
@@ -47,28 +58,30 @@ export function fitLogistic(X: number[][], y: number[], l2 = 1e-2, iters = 3000,
     for (let i = 0; i < Z.length; i++) {
       let z = b;
       for (let j = 0; j < d; j++) z += w[j] * Z[i][j];
-      const e = sigmoid(z) - y[i];
+      const e = (sigmoid(z) - y[i]) * sw[i];
       for (let j = 0; j < d; j++) gw[j] += e * Z[i][j];
       gb += e;
     }
-    for (let j = 0; j < d; j++) w[j] -= lr * (gw[j] / Z.length + l2 * w[j]);
-    b -= lr * (gb / Z.length);
+    const W = sw.reduce((a, v) => a + v, 0);
+    for (let j = 0; j < d; j++) w[j] -= lr * (gw[j] / W + l2 * w[j]);
+    b -= lr * (gb / W);
   }
   return { mean, std, weights: w, bias: b };
 }
 
-export function nll(p: number[], y: number[]): number {
+export function nll(p: number[], y: number[], sw: number[] = y.map(() => 1)): number {
   const eps = 1e-12;
-  return -y.reduce((s, yi, i) => s + yi * Math.log(p[i] + eps) + (1 - yi) * Math.log(1 - p[i] + eps), 0) / y.length;
+  const W = sw.reduce((a, v) => a + v, 0);
+  return -y.reduce((s, yi, i) => s + sw[i] * (yi * Math.log(p[i] + eps) + (1 - yi) * Math.log(1 - p[i] + eps)), 0) / W;
 }
 
 // Temperature scaling (Guo et al., 2017): one scalar T fitted on held-out
 // logits by minimising NLL. Grid search is enough for one parameter.
-export function fitTemperature(logits: number[], y: number[]): number {
+export function fitTemperature(logits: number[], y: number[], sw: number[] = y.map(() => 1)): number {
   let best = 1;
   let bestLoss = Infinity;
   for (let T = 0.2; T <= 6.0001; T += 0.01) {
-    const loss = nll(logits.map((z) => sigmoid(z / T)), y);
+    const loss = nll(logits.map((z) => sigmoid(z / T)), y, sw);
     if (loss < bestLoss) {
       bestLoss = loss;
       best = T;

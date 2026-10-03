@@ -1,0 +1,10 @@
+{
+  "walmart_fix": {
+    "what": "Added entity_missing_doc (does the filing mention the companies/products the question names) and a possessive-aware tokenizer after 'What was Walmart's capital expenditure in fiscal 2023?' scored 0.69 on Best Buy's 10-K, which never mentions Walmart",
+    "bench": "earlier bench design: 150 own-filing vs 150 wrong-company 10-K, k=4, 5-fold CV grouped by company (commit dc1b969 history)",
+    "calibrated_lr_accuracy_before": 0.820,
+    "calibrated_lr_accuracy_after": 0.910,
+    "ece_before": 0.046,
+    "ece_after": 0.033
+  }
+}

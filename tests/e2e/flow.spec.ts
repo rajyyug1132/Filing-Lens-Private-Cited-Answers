@@ -59,7 +59,11 @@ test('pre-indexed sample: cited answer, page jump, wrong-company abstain; persis
   await expect(page.getByTestId('answer-card').getByTestId('cite-chip').first()).toHaveText('p.42');
   await page.getByTestId('question').fill('What was Walmart\'s capital expenditure in fiscal 2023?');
   await page.getByTestId('ask-btn').click();
-  await expect(page.getByTestId('abstain-card')).toBeVisible();
+  await expect(page.getByTestId('abstain-card').last()).toContainText('Stopped at the feature gate');
+  // passes the gate, then the verifier (recorded ABSTAIN) stops it: the cascade's second stage
+  await page.getByTestId('question').fill("What was Best Buy's total revenue in fiscal 2023?");
+  await page.getByTestId('ask-btn').click();
+  await expect(page.getByTestId('abstain-card').last()).toContainText('stopped by the verifier step');
   await page.reload();
   await expect(page.getByRole('button', { name: /^Best Buy FY2023 10-K/ })).toBeVisible();
 });

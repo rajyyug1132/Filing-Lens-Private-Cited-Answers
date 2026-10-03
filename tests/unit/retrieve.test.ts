@@ -24,6 +24,7 @@ test('BM25 side of hybrid retrieval finds the right page; features have fixed ar
   assert.equal(r.hits[0].chunk.page, 2);
   const f = features(idx, r);
   assert.equal(f.length, FEATURE_NAMES.length);
+  assert.equal(f[11], 1, "the year asked about is in the top passage");
   assert.equal(f[7], 0, 'year 2023 is present in context');
 });
 

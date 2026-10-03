@@ -1,27 +1,37 @@
-"""Merge Kaggle generation results into the bench.
+"""Cascade bench: feature gate only | DSPy verifier only | cascade (gate -> verifier).
 
-Inputs:  bench/results/gen_inputs.jsonl   (cloud bench: questions, gold, retrieved pages, LR gate p)
-         bench/results/gen_results.jsonl  (Kaggle: answers, cited pages, latency, logprob conf, router P(YES))
-Outputs: bench/results/gen_metrics.json, bench/results/gen_table.md
+Inputs:  bench/results/gen_inputs.jsonl     cloud bench: 150 questions x {own_doc, off_doc, gold_removed}, company-grouped
+                                            split, sentence snippets, out-of-fold gate probability p_gate_oof
+         bench/results/results.json         cloud bench: gate latency
+         bench/results/cascade_results.jsonl  Kaggle (bench/kaggle_gen.ipynb): verifier verdict, evidence page, P(ANSWER)
+                                            from logprobs, cited answer, latency, per build (vllm_fp16, gguf_q4)
+Outputs: bench/results/cascade_table.md, bench/results/cascade_metrics.json
 
-Metrics
-- citation accuracy: answered gold-answer cases whose cited pages are all in the context AND include a gold page
-- answer accuracy (auto-graded): numeric gold answers must match a number in the model answer within 1% relative;
-  non-numeric gold answers count as correct at token-F1 >= 0.4. This is an approximation of the human grading
-  FinanceBench used; the per-row grades are written out for spot checks.
-- end-to-end decision accuracy per gate: correct = (gold-answer AND answered AND answer correct) OR (gold-abstain AND abstained)
-- tokens/sec, latency (median, p95)
-
-If gen_results.jsonl is missing, every metric is written as "pending".
+All rows are scored on the TEST split only (companies never seen by the gate fold or the DSPy compile).
+- Easy acc: decisions on own_doc (should ANSWER) + off_doc (should ABSTAIN)
+- Hard acc: decisions on own_doc + gold_removed (should ABSTAIN). Never merged with Easy.
+- ECE: 10-bin ECE of the system's P(answer), reported per set (Easy / Hard)
+- Citation page match: answered gold-answer cases whose evidence page is a gold page. The gate proposes no page, so
+  its row uses the top-ranked retrieved page (labelled).
+- p50 latency: per decision. Gate: Node, this machine. Verifier rows: the Kaggle T4 build named in the row.
+- Verifier calls %: share of test instances that reach the 3B verifier.
+Cascade confidence = p_gate when the gate abstains, else the verifier's P(ANSWER).
 """
 import json
 import re
 import statistics
-import sys
 from pathlib import Path
 
 R = Path("bench/results")
-GATES = {"No gate": None, "Calibrated LR gate": "p_gate_oof", "LLM-router (3B YES/NO)": "p_yes", "Logprob confidence": "logprob_conf"}
+
+
+def ece(p, y, bins=10):
+    tot, n = 0.0, len(p)
+    for b in range(bins):
+        idx = [i for i, v in enumerate(p) if min(bins - 1, int(v * bins)) == b]
+        if idx:
+            tot += len(idx) / n * abs(sum(y[i] for i in idx) / len(idx) - sum(p[i] for i in idx) / len(idx))
+    return tot
 
 
 def nums(s):
@@ -38,81 +48,101 @@ def f1(a, b):
 
 
 def grade(gold, ans):
+    """Auto-grade (approximation of FinanceBench's human grading): short numeric gold -> a number within 1%;
+    otherwise token-F1 >= 0.4."""
     g = nums(gold)
-    if g and re.search(r"[\d]", gold) and len(gold) < 40:  # short numeric gold answer
-        a = nums(ans)
-        return any(abs(x - g[0]) <= 0.01 * max(1.0, abs(g[0])) for x in a)
+    if g and len(gold) < 40:
+        return any(abs(x - g[0]) <= 0.01 * max(1.0, abs(g[0])) for x in nums(ans))
     return f1(gold, ans) >= 0.4
 
 
-def pct(v, q):
-    v = sorted(v)
-    return v[min(len(v) - 1, int(q * len(v)))] if v else None
+def p50(v):
+    v = [x for x in v if x is not None]
+    return statistics.median(v) if v else None
+
+
+def system_scores(decisions, confs, pages, inputs, lat, calls):
+    """decisions/confs/pages keyed by instance id over the test split."""
+    out = {}
+    for label, neg in (("easy", "off_doc"), ("hard", "gold_removed")):
+        ids = [i for i, g in inputs.items() if g["kind"] in ("own_doc", neg)]
+        y = [1 if inputs[i]["kind"] == "own_doc" else 0 for i in ids]
+        d = [decisions[i] for i in ids]
+        out[f"{label}_acc"] = sum(int(a == b) for a, b in zip(d, y)) / len(ids)
+        out[f"{label}_ece"] = ece([confs[i] for i in ids], y)
+        out[f"{label}_n"] = len(ids)
+    answered_own = [i for i, g in inputs.items() if g["kind"] == "own_doc" and decisions[i] == 1]
+    out["citation_page_match"] = (sum(int(pages.get(i) in inputs[i]["gold_pages"]) for i in answered_own) / len(answered_own)) if answered_own else None
+    out["answered_gold_answer_cases"] = len(answered_own)
+    out["latency_p50_ms"] = p50(lat)
+    out["verifier_calls_pct"] = calls
+    return out
 
 
 def main():
-    inputs = {json.loads(l)["id"]: json.loads(l) for l in (R / "gen_inputs.jsonl").read_text().splitlines() if l.strip()}
-    res_path = R / "gen_results.jsonl"
-    if not res_path.exists():
-        out = {"status": "pending", "reason": "bench/results/gen_results.jsonl not found; run bench/kaggle_gen.ipynb on Kaggle"}
-        (R / "gen_metrics.json").write_text(json.dumps(out, indent=2))
-        (R / "gen_table.md").write_text("| Metric | Value |\n|---|---|\n| Citation accuracy | pending |\n| Answer accuracy | pending |\n| Tokens/sec | pending |\n")
-        print("pending")
-        return
-    rows = [json.loads(l) for l in res_path.read_text().splitlines() if l.strip()]
+    inputs = {g["id"]: g for g in (json.loads(l) for l in (R / "gen_inputs.jsonl").read_text().splitlines() if l.strip()) if g["split"] == "test"}
+    bench = json.loads((R / "results.json").read_text())
+    L = bench["latencyMs"]
+    gate_ms = L["featureExtraction"]["p50"] + L["classifierPredict"]["p50"]
+    gate_pass = {i: g["p_gate_oof"] >= 0.5 for i, g in inputs.items()}
+    metrics = {"split": "test", "instances": len(inputs), "rows": {}}
+
+    metrics["rows"]["Feature gate only"] = system_scores(
+        {i: int(gate_pass[i]) for i in inputs},
+        {i: g["p_gate_oof"] for i, g in inputs.items()},
+        {i: g["top1_page"] for i, g in inputs.items()},
+        inputs, [gate_ms] * len(inputs), 0.0,
+    )
+    metrics["rows"]["Feature gate only"]["page_source"] = "top-ranked retrieved page"
+    metrics["rows"]["Feature gate only"]["latency_where"] = bench["machine"]
+
+    res_path = R / "cascade_results.jsonl"
+    rows = [json.loads(l) for l in res_path.read_text().splitlines() if l.strip()] if res_path.exists() else []
     if any(r.get("model") == "stub" for r in rows):
-        sys.exit("gen_results.jsonl comes from a DRY_RUN (stub model); refusing to report it as real numbers")
-    ans = {r["id"]: r for r in rows if r["arm"] == "answer"}
-    router = {r["id"]: r for r in rows if r["arm"] == "llm_router"}
-    graded = []
-    for i, a in ans.items():
-        inp = inputs[i]
-        ctx = {h["page"] for h in inp["hits"]}
-        cited = set(a["cited_pages"])
-        own = inp["kind"] == "own_doc"
-        answered = (not a["refused"]) and bool(cited) and cited <= ctx
-        cite_ok = own and answered and bool(cited & set(inp["gold_pages"]))
-        correct = own and answered and grade(inp["gold_answer"], a["answer"])
-        graded.append({"id": i, "kind": inp["kind"], "answered": answered, "cite_ok": cite_ok, "correct": correct,
-                       "p_gate_oof": inp.get("p_gate_oof"), "p_yes": router.get(i, {}).get("p_yes"), "logprob_conf": a.get("logprob_conf"),
-                       "tokens_per_s": a.get("tokens_per_s"), "latency_s": a["latency_s"], "question_type": inp["question_type"]})
-    own = [g for g in graded if g["kind"] == "own_doc"]
-    own_answered = [g for g in own if g["answered"]]
-    metrics = {
-        "status": "real",
-        "model": rows[0]["model"],
-        "instances": len(graded),
-        "citation_accuracy_on_answered": sum(g["cite_ok"] for g in own_answered) / max(1, len(own_answered)),
-        "answer_accuracy_gold_answer_cases": sum(g["correct"] for g in own) / max(1, len(own)),
-        "refusal_rate_gold_abstain_cases": sum(not g["answered"] for g in graded if g["kind"] == "off_doc") / max(1, sum(g["kind"] == "off_doc" for g in graded)),
-        "tokens_per_s_median": statistics.median([g["tokens_per_s"] for g in graded if g["tokens_per_s"]] or [0]),
-        "latency_s_p50": pct([g["latency_s"] for g in graded], 0.5),
-        "latency_s_p95": pct([g["latency_s"] for g in graded], 0.95),
-        "end_to_end": {},
-    }
-    for name, key in GATES.items():
-        ok = 0
-        n = 0
-        for g in graded:
-            p = 1.0 if key is None else g.get(key)
-            if p is None:
-                continue
-            n += 1
-            gate_pass = p >= 0.5
-            final_answer = gate_pass and g["answered"]
-            ok += (g["kind"] == "own_doc" and final_answer and g["correct"]) or (g["kind"] == "off_doc" and not final_answer)
-        metrics["end_to_end"][name] = {"accuracy": ok / n if n else None, "n": n}
-    (R / "gen_metrics.json").write_text(json.dumps(metrics, indent=2))
-    (R / "gen_graded.jsonl").write_text("\n".join(json.dumps(g) for g in graded) + "\n")
-    md = "| Metric | Value |\n|---|---|\n"
-    md += f"| Citation accuracy (answered, gold-answer cases) | {metrics['citation_accuracy_on_answered']:.3f} |\n"
-    md += f"| Answer accuracy (auto-graded, gold-answer cases) | {metrics['answer_accuracy_gold_answer_cases']:.3f} |\n"
-    md += f"| Refusal rate on gold-abstain cases (no gate) | {metrics['refusal_rate_gold_abstain_cases']:.3f} |\n"
-    md += f"| Tokens/sec (median, T4) | {metrics['tokens_per_s_median']:.1f} |\n"
-    for name, v in metrics["end_to_end"].items():
-        md += f"| End-to-end accuracy: {name} | {v['accuracy']:.3f} (n={v['n']}) |\n" if v["accuracy"] is not None else f"| End-to-end accuracy: {name} | n/a |\n"
-    md += "| End-to-end accuracy: Jev | [ASK: what is Jev + can it run locally] |\n"
-    (R / "gen_table.md").write_text(md)
+        raise SystemExit("cascade_results.jsonl comes from a DRY_RUN (stub model); refusing to report it")
+    builds = sorted({r["build"] for r in rows})
+    metrics["status"] = "real" if builds else "pending"
+    cascade_calls = 100.0 * sum(gate_pass.values()) / len(inputs)
+    metrics["cascade_verifier_calls_pct"] = cascade_calls
+    for b in builds:
+        V = {r["id"]: r for r in rows if r["build"] == b and r["id"] in inputs}
+        if len(V) != len(inputs):
+            print(f"warning: build {b} covers {len(V)}/{len(inputs)} test instances")
+        ids = [i for i in inputs if i in V]
+        sub = {i: inputs[i] for i in ids}
+        conf_v = {i: (V[i]["p_answer"] if V[i]["p_answer"] is not None else float(V[i]["verdict"] == "ANSWER")) for i in ids}
+        dec_v = {i: int(V[i]["verdict"] == "ANSWER") for i in ids}
+        page_v = {i: int(re.sub(r"\D", "", V[i]["evidence_page"]) or -1) for i in ids}
+        metrics["rows"][f"Verifier only ({b})"] = system_scores(dec_v, conf_v, page_v, sub, [V[i]["latency_check_s"] * 1000 for i in ids], 100.0)
+        dec_c = {i: int(gate_pass[i] and dec_v[i]) for i in ids}
+        conf_c = {i: (conf_v[i] if gate_pass[i] else sub[i]["p_gate_oof"]) for i in ids}
+        lat_c = [gate_ms + (V[i]["latency_check_s"] * 1000 if gate_pass[i] else 0.0) for i in ids]
+        metrics["rows"][f"Cascade: gate → verifier ({b})"] = system_scores(dec_c, conf_c, page_v, sub, lat_c, 100.0 * sum(gate_pass[i] for i in ids) / len(ids))
+        own = [i for i in ids if sub[i]["kind"] == "own_doc"]
+        answered = [i for i in own if dec_c[i]]
+        metrics.setdefault("generation", {})[b] = {
+            "answer_accuracy_auto_graded_gold_answer_cases": sum(int(dec_c[i] and grade(sub[i]["gold_answer"], V[i]["answer"])) for i in own) / len(own),
+            "answer_cites_only_snippet_pages": (sum(int(set(V[i]["cited_pages"]) <= set(sub[i]["snippet_pages"]) and bool(V[i]["cited_pages"])) for i in answered) / len(answered)) if answered else None,
+            "tokens_per_s_median": p50([V[i]["tokens_per_s"] for i in ids]),
+            "prompt_tokens_check_max": max([V[i]["prompt_tokens_check"] or 0 for i in ids] or [0]),
+            "optimizer": rows[0].get("optimizer"),
+            "dev_metric": rows[0].get("dev_metric"),
+        }
+    (R / "cascade_metrics.json").write_text(json.dumps(metrics, indent=2))
+
+    f = lambda v, d=3: "—" if v is None else f"{v:.{d}f}"
+    md = "| System | Easy acc. | Hard acc. | ECE ↓ (Easy / Hard) | Citation page match | p50 latency | Verifier calls |\n|---|---|---|---|---|---|---|\n"
+    for name, m in metrics["rows"].items():
+        cite = f(m["citation_page_match"]) + (" (top-ranked page)" if m.get("page_source") else "")
+        lat = f"{m['latency_p50_ms']:.2f} ms" if name.startswith("Feature") else f"{m['latency_p50_ms']:.0f} ms"
+        md += f"| {name} | {f(m['easy_acc'])} | {f(m['hard_acc'])} | {f(m['easy_ece'])} / {f(m['hard_ece'])} | {cite} | {lat} | {m['verifier_calls_pct']:.0f}% |\n"
+    if not builds:
+        md += "| Verifier only (Qwen2.5-3B, DSPy-compiled) | pending (Kaggle) | pending (Kaggle) | pending | pending | pending | 100% |\n"
+        md += f"| Cascade: gate → verifier | pending (Kaggle) | pending (Kaggle) | pending | pending | pending | {cascade_calls:.0f}% |\n"
+    md += (f"\nTest split only: {len(inputs)} instances (company-grouped; {sum(g['kind'] == 'own_doc' for g in inputs.values())} per set). "
+           f"Gate latency: features + LR on {bench['machine']}; verifier latency: one verifier call on the Kaggle T4 build named in the row. "
+           f"Retrieval (shared by all rows) is not included.\n")
+    (R / "cascade_table.md").write_text(md)
     print(md)
 
 

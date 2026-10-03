@@ -46,14 +46,15 @@ export function ConfidenceMeter({ value, threshold }: { value: number; threshold
 }
 
 const REASONS = {
-  low_confidence: 'The retrieved pages don’t look like they answer this, so no answer was generated.',
-  model_refused: 'The model read the closest pages and found no answer in them.',
+  low_confidence: 'The retrieved pages don’t look like they answer this, so the model wasn’t asked.',
+  verifier_abstained: 'The on-device model read the closest sentences and found no answer in them.',
+  empty_answer: 'No sentence in the closest pages matched the question.',
   citation_check_failed: 'The draft answer didn’t cite the pages it was given, so it was discarded.',
 } as const;
 
 export function AnswerCard({ outcome, threshold, onPage }: { outcome: Outcome; threshold: number; onPage: (p: number) => void }) {
   const t = outcome.timings;
-  const total = t.embedMs + t.retrieveMs + t.decideMs + t.generateMs;
+  const total = t.embedMs + t.retrieveMs + t.decideMs + t.verifyMs + t.generateMs;
   const pages = Array.from(new Set(outcome.hits.map((h) => h.chunk.page)));
   if (outcome.kind === 'abstain') {
     return (
@@ -72,7 +73,9 @@ export function AnswerCard({ outcome, threshold, onPage }: { outcome: Outcome; t
             <button key={p} className="cite" onClick={() => onPage(p)}>p.{p}</button>
           ))}
         </div>
-        <div className="xsmall muted">Decided in {Math.round(total)} ms on-device</div>
+        <div className="xsmall muted">
+          {outcome.reason === 'low_confidence' ? 'Stopped at the feature gate' : 'Gate passed, then stopped by the verifier step'} · {Math.round(total)} ms on-device
+        </div>
       </div>
     );
   }
@@ -81,8 +84,8 @@ export function AnswerCard({ outcome, threshold, onPage }: { outcome: Outcome; t
       <Cited text={outcome.text} onPage={onPage} />
       <ConfidenceMeter value={outcome.confidence} threshold={threshold} />
       <div className="xsmall muted">
-        {outcome.engine} · {Math.round(total)} ms · citation coverage {Math.round(outcome.citations.coverage * 100)}% · sources:{' '}
-        {outcome.citations.cited.map((p) => `p.${p}`).join(', ')}
+        {outcome.engine} · {outcome.verified ? `verifier: ANSWER (${outcome.evidencePage ?? '?'})` : 'no verifier'} · {Math.round(total)} ms · citation coverage{' '}
+        {Math.round(outcome.citations.coverage * 100)}% · sources: {outcome.citations.cited.map((p) => `p.${p}`).join(', ')}
       </div>
     </div>
   );

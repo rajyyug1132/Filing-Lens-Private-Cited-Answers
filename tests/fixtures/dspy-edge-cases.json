@@ -1,0 +1,75 @@
+{
+ "dspy_version": "3.4.0",
+ "cases": [
+  {
+   "instructions": "First line of the task.\n    Indented second line.\n\nThird line after a blank.",
+   "inputs": [
+    {
+     "name": "question",
+     "desc": ""
+    },
+    {
+     "name": "snippets",
+     "desc": "tagged snippets"
+    }
+   ],
+   "outputs": [
+    {
+     "name": "verdict",
+     "desc": "ANSWER or ABSTAIN"
+    },
+    {
+     "name": "evidence_page",
+     "desc": ""
+    }
+   ],
+   "demos": [
+    {
+     "question": "Q incomplete?",
+     "snippets": "[p.1] a",
+     "verdict": "ABSTAIN"
+    },
+    {
+     "question": "Q full?",
+     "snippets": "[p.2] b\n[p.3] c",
+     "verdict": "ANSWER",
+     "evidence_page": "p.3"
+    }
+   ],
+   "references": [
+    {
+     "inputs": {
+      "question": "What was it?",
+      "snippets": "[p.9] value 1,234 [x]"
+     },
+     "messages": [
+      {
+       "role": "system",
+       "content": "Your input fields are:\n1. `question` (str): \n2. `snippets` (str): tagged snippets\nYour output fields are:\n1. `verdict` (str): ANSWER or ABSTAIN\n2. `evidence_page` (str):\nAll interactions will be structured in the following way, with the appropriate values filled in.\n\n[[ ## question ## ]]\n{question}\n\n[[ ## snippets ## ]]\n{snippets}\n\n[[ ## verdict ## ]]\n{verdict}\n\n[[ ## evidence_page ## ]]\n{evidence_page}\n\n[[ ## completed ## ]]\nIn adhering to this structure, your objective is: \n        First line of the task.\n            Indented second line.\n        \n        Third line after a blank."
+      },
+      {
+       "role": "user",
+       "content": "This is an example of the task, though some input or output fields are not supplied.\n\n[[ ## question ## ]]\nQ incomplete?\n\n[[ ## snippets ## ]]\n[p.1] a"
+      },
+      {
+       "role": "assistant",
+       "content": "[[ ## verdict ## ]]\nABSTAIN\n\n[[ ## evidence_page ## ]]\nNot supplied for this particular example.\n\n[[ ## completed ## ]]\n"
+      },
+      {
+       "role": "user",
+       "content": "[[ ## question ## ]]\nQ full?\n\n[[ ## snippets ## ]]\n[p.2] b\n[p.3] c"
+      },
+      {
+       "role": "assistant",
+       "content": "[[ ## verdict ## ]]\nANSWER\n\n[[ ## evidence_page ## ]]\np.3\n\n[[ ## completed ## ]]\n"
+      },
+      {
+       "role": "user",
+       "content": "[[ ## question ## ]]\nWhat was it?\n\n[[ ## snippets ## ]]\n[p.9] value 1,234 [x]\n\nRespond with the corresponding output fields, starting with the field `[[ ## verdict ## ]]`, then `[[ ## evidence_page ## ]]`, and then ending with the marker for `[[ ## completed ## ]]`."
+      }
+     ]
+    }
+   ]
+  }
+ ]
+}
