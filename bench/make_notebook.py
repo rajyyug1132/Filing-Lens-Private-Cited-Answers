@@ -135,7 +135,8 @@ print(f"dev balanced metric, BootstrapFewShot: {dev_bfs:.3f} (ANSWER {n_ans}, AB
 # Optional: MIPROv2 light, kept only if dev improves
 if RUN_MIPRO and time.time() - T0 < TIME_BUDGET_S * 0.5:
     mipro = dspy.MIPROv2(metric=metric, auto="light", max_bootstrapped_demos=2, max_labeled_demos=2, num_threads=8)
-    cand = clean_answer_demos(mipro.compile(lens.deepcopy(), trainset=by_split["train"], valset=by_split["dev"]))
+    # MIPROv2 needs an uncompiled student (it bootstraps its own demos); the BootstrapFewShot result is the baseline to beat
+    cand = clean_answer_demos(mipro.compile(Lens(), trainset=by_split["train"], valset=by_split["dev"]))
     dev_mipro = score(cand)
     print(f"dev balanced metric, MIPROv2 light: {dev_mipro:.3f}")
     if dev_mipro > dev_bfs:
