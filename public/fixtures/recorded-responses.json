@@ -1,0 +1,9 @@
+{
+  "source": "hand-authored test fixture; replace with Kaggle-recorded Qwen2.5-3B outputs",
+  "responses": {
+    "How much total cash was provided by operating activities in fiscal 2023?": "Total cash provided by operating activities was $1,824 million in fiscal 2023, down from $3,252 million in fiscal 2022 [p.42].",
+    "How much cash did operating activities provide in fiscal 2023?": "Operating activities provided $1,824 million of cash in fiscal 2023 [p.42].",
+    "What was total revenue in fiscal 2023?": "NOT IN DOCUMENT",
+    "Which page lists the cash flow statement?": "The consolidated statements of cash flows are on page 99 [p.99]."
+  }
+}

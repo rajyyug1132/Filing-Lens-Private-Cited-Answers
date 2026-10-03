@@ -1,0 +1,374 @@
+{
+  "dataset": "FinanceBench open-source (patronus-ai/financebench), 150 questions, 84 filings",
+  "instances": 300,
+  "positives": 150,
+  "recallAtK": {
+    "1": 0.23333333333333334,
+    "2": 0.3333333333333333,
+    "4": 0.44,
+    "8": 0.6333333333333333,
+    "16": 0.7333333333333333
+  },
+  "goldInContextAt4OnAnswerCases": 66,
+  "k": 4,
+  "folds": 5,
+  "latencyMs": {
+    "queryEmbedPlusRetrieve": {
+      "p50": 9.523396999999022,
+      "p95": 21.664676000000327
+    },
+    "featureExtraction": {
+      "p50": 0.2828669999998965,
+      "p95": 0.45802199999889126
+    },
+    "classifierPredict": {
+      "p50": 0.00038100000529084355,
+      "p95": 0.001233000002685003
+    }
+  },
+  "machine": "Node v22.22.0, 4 vCPU container, no GPU",
+  "results": [
+    {
+      "key": "always",
+      "name": "No gate (always answer)",
+      "accuracy": 0.5,
+      "ece": 0.5,
+      "auroc": null,
+      "answerRate": 1,
+      "abstainPrecision": null,
+      "abstainRecall": 0,
+      "unsupportedAnswerRate": 0.5,
+      "accOwnDoc": 1,
+      "accOffDoc": 0
+    },
+    {
+      "key": "cosine",
+      "name": "Retrieval score threshold (uncalibrated)",
+      "accuracy": 0.78,
+      "ece": 0.20428125963678853,
+      "auroc": 0.8728,
+      "answerRate": 0.54,
+      "abstainPrecision": 0.8043478260869565,
+      "abstainRecall": 0.74,
+      "unsupportedAnswerRate": 0.13,
+      "accOwnDoc": 0.82,
+      "accOffDoc": 0.74
+    },
+    {
+      "key": "lrRaw",
+      "name": "LR gate, no temperature",
+      "accuracy": 0.91,
+      "ece": 0.045253835922834475,
+      "auroc": 0.9724888888888888,
+      "answerRate": 0.5233333333333333,
+      "abstainPrecision": 0.9300699300699301,
+      "abstainRecall": 0.8866666666666667,
+      "unsupportedAnswerRate": 0.056666666666666664,
+      "accOwnDoc": 0.9333333333333333,
+      "accOffDoc": 0.8866666666666667
+    },
+    {
+      "key": "lrTemp",
+      "name": "Calibrated LR gate (LR + temperature, shipped)",
+      "accuracy": 0.91,
+      "ece": 0.03301021779457105,
+      "auroc": 0.9729777777777778,
+      "answerRate": 0.5233333333333333,
+      "abstainPrecision": 0.9300699300699301,
+      "abstainRecall": 0.8866666666666667,
+      "unsupportedAnswerRate": 0.056666666666666664,
+      "accOwnDoc": 0.9333333333333333,
+      "accOffDoc": 0.8866666666666667
+    }
+  ],
+  "reliabilityBins": {
+    "always": [
+      {
+        "lo": 0,
+        "hi": 0.1,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.1,
+        "hi": 0.2,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.2,
+        "hi": 0.3,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.3,
+        "hi": 0.4,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.4,
+        "hi": 0.5,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.5,
+        "hi": 0.6,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.6,
+        "hi": 0.7,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.7,
+        "hi": 0.8,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.8,
+        "hi": 0.9,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.9,
+        "hi": 1,
+        "count": 300,
+        "meanConf": 1,
+        "fracPos": 0.5
+      }
+    ],
+    "cosine": [
+      {
+        "lo": 0,
+        "hi": 0.1,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.1,
+        "hi": 0.2,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.2,
+        "hi": 0.3,
+        "count": 1,
+        "meanConf": 0.2719683989055129,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.3,
+        "hi": 0.4,
+        "count": 33,
+        "meanConf": 0.371299618958278,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.4,
+        "hi": 0.5,
+        "count": 99,
+        "meanConf": 0.4532563139845508,
+        "fracPos": 0.24242424242424243
+      },
+      {
+        "lo": 0.5,
+        "hi": 0.6,
+        "count": 108,
+        "meanConf": 0.5482445395548294,
+        "fracPos": 0.6759259259259259
+      },
+      {
+        "lo": 0.6,
+        "hi": 0.7,
+        "count": 48,
+        "meanConf": 0.6398935241034914,
+        "fracPos": 0.875
+      },
+      {
+        "lo": 0.7,
+        "hi": 0.8,
+        "count": 9,
+        "meanConf": 0.727864877280131,
+        "fracPos": 1
+      },
+      {
+        "lo": 0.8,
+        "hi": 0.9,
+        "count": 2,
+        "meanConf": 0.818384846776153,
+        "fracPos": 1
+      },
+      {
+        "lo": 0.9,
+        "hi": 1,
+        "count": 0,
+        "meanConf": 0,
+        "fracPos": 0
+      }
+    ],
+    "lrRaw": [
+      {
+        "lo": 0,
+        "hi": 0.1,
+        "count": 96,
+        "meanConf": 0.02944799890345406,
+        "fracPos": 0.010416666666666666
+      },
+      {
+        "lo": 0.1,
+        "hi": 0.2,
+        "count": 18,
+        "meanConf": 0.14675908071169022,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.2,
+        "hi": 0.3,
+        "count": 14,
+        "meanConf": 0.22605813960961724,
+        "fracPos": 0.14285714285714285
+      },
+      {
+        "lo": 0.3,
+        "hi": 0.4,
+        "count": 7,
+        "meanConf": 0.340207185425898,
+        "fracPos": 0.2857142857142857
+      },
+      {
+        "lo": 0.4,
+        "hi": 0.5,
+        "count": 8,
+        "meanConf": 0.4482157757076515,
+        "fracPos": 0.625
+      },
+      {
+        "lo": 0.5,
+        "hi": 0.6,
+        "count": 3,
+        "meanConf": 0.5797759120737783,
+        "fracPos": 0.3333333333333333
+      },
+      {
+        "lo": 0.6,
+        "hi": 0.7,
+        "count": 13,
+        "meanConf": 0.6525235180728765,
+        "fracPos": 0.5384615384615384
+      },
+      {
+        "lo": 0.7,
+        "hi": 0.8,
+        "count": 16,
+        "meanConf": 0.7535103614913093,
+        "fracPos": 0.6875
+      },
+      {
+        "lo": 0.8,
+        "hi": 0.9,
+        "count": 22,
+        "meanConf": 0.8519346849084722,
+        "fracPos": 0.9545454545454546
+      },
+      {
+        "lo": 0.9,
+        "hi": 1,
+        "count": 103,
+        "meanConf": 0.9649397553843658,
+        "fracPos": 0.970873786407767
+      }
+    ],
+    "lrTemp": [
+      {
+        "lo": 0,
+        "hi": 0.1,
+        "count": 109,
+        "meanConf": 0.01807956272062815,
+        "fracPos": 0.009174311926605505
+      },
+      {
+        "lo": 0.1,
+        "hi": 0.2,
+        "count": 16,
+        "meanConf": 0.1558237915744846,
+        "fracPos": 0.0625
+      },
+      {
+        "lo": 0.2,
+        "hi": 0.3,
+        "count": 5,
+        "meanConf": 0.22867322621193162,
+        "fracPos": 0.2
+      },
+      {
+        "lo": 0.3,
+        "hi": 0.4,
+        "count": 7,
+        "meanConf": 0.34868792278832267,
+        "fracPos": 0.42857142857142855
+      },
+      {
+        "lo": 0.4,
+        "hi": 0.5,
+        "count": 6,
+        "meanConf": 0.4421040924197703,
+        "fracPos": 0.6666666666666666
+      },
+      {
+        "lo": 0.5,
+        "hi": 0.6,
+        "count": 2,
+        "meanConf": 0.5879223673763592,
+        "fracPos": 0
+      },
+      {
+        "lo": 0.6,
+        "hi": 0.7,
+        "count": 6,
+        "meanConf": 0.6551039993945824,
+        "fracPos": 0.6666666666666666
+      },
+      {
+        "lo": 0.7,
+        "hi": 0.8,
+        "count": 14,
+        "meanConf": 0.7451585184282609,
+        "fracPos": 0.5714285714285714
+      },
+      {
+        "lo": 0.8,
+        "hi": 0.9,
+        "count": 20,
+        "meanConf": 0.8611886062862881,
+        "fracPos": 0.85
+      },
+      {
+        "lo": 0.9,
+        "hi": 1,
+        "count": 115,
+        "meanConf": 0.978157166065232,
+        "fracPos": 0.9652173913043478
+      }
+    ]
+  }
+}

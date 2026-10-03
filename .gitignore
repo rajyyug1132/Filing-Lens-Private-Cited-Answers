@@ -1,0 +1,11 @@
+node_modules
+.next
+out
+bench/.cache
+bench/.data
+test-results
+playwright-report
+*.tsbuildinfo
+next-env.d.ts
+public/vendor
+public/models
