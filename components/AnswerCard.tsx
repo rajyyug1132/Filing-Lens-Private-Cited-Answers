@@ -76,7 +76,7 @@ export function AnswerCard({ outcome, threshold, onPage }: { outcome: Outcome; t
           ))}
         </div>
         <div className="xsmall muted">
-          {outcome.reason === 'low_confidence' ? 'Stopped at the feature gate' : 'Gate passed, then stopped by the verifier step'} · {Math.round(total)} ms on-device
+          {outcome.reason === 'low_confidence' ? 'Stopped at the feature gate' : outcome.reason === 'verifier_abstained' ? 'Gate passed, then stopped by the verifier step (strict mode)' : 'Gate passed, then stopped by the citation check'} · {Math.round(total)} ms on-device
         </div>
       </div>
     );

@@ -11,7 +11,7 @@ PDF ─ pdf.js ─▶ page text ─▶ chunks (≤160 words, never cross a page)
 question ─▶ hybrid retrieval (dense + BM25, RRF, k=8, prompt capped at 3000 tokens)
    ─▶ ① feature gate: 12 features → logistic regression ÷ T      p < 0.5 → ABSTAIN (the 3B never runs)
    ─▶ sentence snippets (≤2,200 chars, each tagged [p.N])
-   ─▶ ② DSPy verifier on the 3B: ANSWER / ABSTAIN + evidence page             ABSTAIN → ABSTAIN
+   ─▶ ② (Strict mode only, off by default) DSPy verifier on the 3B: ANSWER / ABSTAIN   ABSTAIN → ABSTAIN
    ─▶ DSPy cited answer on the 3B ─▶ every [p.N] must be a snippet page     else ABSTAIN
 3B: Qwen2.5-3B-Instruct (WebLLM, WebGPU) | no WebGPU → Qwen2.5-1.5B Q4_K_M (wllama, WASM)
 ```
@@ -93,12 +93,12 @@ npm rebuild sharp && npm run bench          # cloud bench (needs FinanceBench at
 Tests use `?engine=fixture`, which replays `public/fixtures/recorded-responses.json` (ChatAdapter-format completions) in place of the model. Those responses are hand-authored for now; replace them with Kaggle-recorded outputs. Everything else in the tests is real: retrieval, gate, DSPy prompt builder and parser, citation check, UI. There is no phone on the build machine, so the e2e suite runs in headless Chromium.
 
 ## Data and licences
-- **FinanceBench** (Islam et al. 2023, arXiv:2311.11944), github.com/patronus-ai/financebench. The GitHub repo has no LICENSE file (the GitHub API reports `license: null`). The Hugging Face dataset card's licence could not be checked from the build machine because huggingface.co was blocked: **[ASK: confirm FinanceBench licence terms]**. The PDFs are public SEC filings. `tests/fixtures/BESTBUY_2023_10K.pdf` (also the bundled sample) is Best Buy's FY2023 10-K from that repo.
+- **FinanceBench** (Islam et al. 2023, arXiv:2311.11944), github.com/patronus-ai/financebench. The GitHub repo has no LICENSE file (the GitHub API reports `license: null`). The Hugging Face dataset card (PatronusAI/financebench) is reported as **CC-BY-NC-4.0**; this could not be checked from the build machine because huggingface.co was blocked (**[ASK: confirm on the card]**). It is used here only for non-commercial evaluation. The PDFs are public SEC filings. `tests/fixtures/BESTBUY_2023_10K.pdf` (also the bundled sample) is Best Buy's FY2023 10-K from that repo.
 - **all-MiniLM-L6-v2** (Apache-2.0), quantised ONNX vendored via the npm package `@ryanstark24/sfgraph-models` (MIT).
 - **Qwen2.5-3B/1.5B-Instruct**: downloaded at runtime by the user's browser, not redistributed here. Check the Qwen licence on the model card before commercial use.
 
 ## Limits
-- The feature gate can't see content: Hard accuracy 0.52. The DSPy-compiled 3B verifier didn't fix that: it abstains on 51–53 of 55 answer cases (Hard 0.495). As shipped, the cascade answers rarely; the gate alone is the stronger Easy filter (0.864).
+- The feature gate can't see content: Hard accuracy 0.52. The DSPy-compiled 3B verifier didn't fix that: it abstains on 51–53 of 55 answer cases (Hard 0.495). So the verifier ships **off by default** as an opt-in Strict mode; the default path is gate → cited answer → citation check, and the gate alone is the stronger Easy filter (0.864). Answer accuracy of that default path with the 3B has not been measured (the Kaggle run only generated answers after the verifier).
 - Retrieval is the bottleneck: gold-page recall@4 0.440, @8 0.633. Under the 3k cap the 3B sees the gold page 57% of the time, and the sentence snippets keep it 53% of the time.
 - A failure found and fixed: Best Buy's 10-K never mentions Walmart, yet "Walmart capex?" passed the gate. Adding a feature for whether the companies a question names appear in the filing fixed it (0.820 → 0.910 on the earlier own-vs-wrong-company bench; `bench/results/history.json`).
 - Answers are auto-graded (number within 1%, else token-F1), an approximation of FinanceBench's human grading.

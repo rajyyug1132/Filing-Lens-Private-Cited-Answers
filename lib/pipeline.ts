@@ -38,7 +38,7 @@ export async function ask(
   question: string,
   embed: (t: string[]) => Promise<Float32Array[]>,
   engine: Engine,
-  opts: { threshold?: number; onText?: (t: string) => void } = {},
+  opts: { threshold?: number; strict?: boolean; onText?: (t: string) => void } = {},
 ): Promise<Outcome> {
   const t0 = performance.now();
   const [qv] = await embed([question]);
@@ -61,16 +61,22 @@ export async function ask(
   }
 
   const inputs = { question, snippets: snip.text };
-  const v = parseOutput(verifier.predictors.check, await engine.chat(formatMessages(verifier.predictors.check, inputs), 40));
-  const t4 = performance.now();
-  timings.verifyMs = t4 - t3;
-  if ((v.verdict ?? '').trim().toUpperCase() !== 'ANSWER') return { kind: 'abstain', reason: 'verifier_abstained', ...base, engine: engine.label };
+  // Strict mode adds the DSPy verifier step. Off by default: on the FinanceBench test split it
+  // said ANSWER on 2-4 of 55 answerable questions (bench/results/cascade_metrics.json).
+  let evidencePage: string | null = null;
+  if (opts.strict) {
+    const v = parseOutput(verifier.predictors.check, await engine.chat(formatMessages(verifier.predictors.check, inputs), 40));
+    timings.verifyMs = performance.now() - t3;
+    if ((v.verdict ?? '').trim().toUpperCase() !== 'ANSWER') return { kind: 'abstain', reason: 'verifier_abstained', ...base, engine: engine.label };
+    evidencePage = v.evidence_page ?? null;
+  }
 
+  const t5 = performance.now();
   const raw = await engine.chat(formatMessages(verifier.predictors.answer, inputs), 200, opts.onText);
-  timings.generateMs = performance.now() - t4;
+  timings.generateMs = performance.now() - t5;
   const text = (parseOutput(verifier.predictors.answer, raw).answer ?? '').trim();
   if (!text) return { kind: 'abstain', reason: 'empty_answer', ...base, draft: raw, engine: engine.label };
   const citations = checkCitations(text, pages);
   if (!citations.ok) return { kind: 'abstain', reason: 'citation_check_failed', ...base, draft: text, engine: engine.label };
-  return { kind: 'answer', text, ...base, citations, evidencePage: v.evidence_page, engine: engine.label, verified: true };
+  return { kind: 'answer', text, ...base, citations, evidencePage, engine: engine.label, verified: !!opts.strict };
 }
