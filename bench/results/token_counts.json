@@ -1,0 +1,21 @@
+{
+  "tokenizer": "Qwen/Qwen2.5-3B-Instruct (apply_chat_template)",
+  "verifier": {
+    "max": 2632,
+    "worst_id": "financebench_id_00394:gold_removed",
+    "p95": 2514,
+    "median": 2310,
+    "demos": 2,
+    "budget": 3000,
+    "fits": true
+  },
+  "answer": {
+    "max": 2567,
+    "worst_id": "financebench_id_00394:gold_removed",
+    "p95": 2449,
+    "median": 2245,
+    "demos": 2,
+    "budget": 3000,
+    "fits": true
+  }
+}
