@@ -11,3 +11,9 @@ public/vendor
 public/models
 __pycache__/
 bench/results/kaggle/
+
+# local agent tooling
+.claude/
+.agents/
+skills-lock.json
+brag-output/

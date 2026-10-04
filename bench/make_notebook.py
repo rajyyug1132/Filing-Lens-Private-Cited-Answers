@@ -260,7 +260,7 @@ print("wrote", OUT / "cascade_results.jsonl", OUT / "verifier.json", OUT / "app_
 **Next:** from the notebook's Output tab download `cascade_results.jsonl`, `token_counts.json`, `app_verifier.json` and `verifier.json`, then
 `cp app_verifier.json app/prompts/verifier.json`, `cp cascade_results.jsonl token_counts.json verifier.json bench/results/`, run
 `python bench/ingest_gen.py` and `npm test` (the prompt-equality test checks the browser rebuilds the compiled prompts exactly).
-Or push them and tell Claude "ingest".
+Or push them and run the ingest step.
 """),
 ]
 for i, c in enumerate(cells):
