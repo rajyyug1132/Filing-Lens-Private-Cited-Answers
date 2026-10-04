@@ -31,6 +31,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [sheetPage, setSheetPage] = useState<number | null>(null);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [strict, setStrict] = useState(false);
   const net = useNetworkLog();
   const fileRef = useRef<HTMLInputElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -116,6 +117,7 @@ export default function App() {
     setBusy(true);
     try {
       const outcome = await ask(active.index, question, embed, engine, {
+        strict,
         onText: (s) => setTurns((t) => t.map((x) => (x.id === id ? { ...x, streaming: s } : x))),
       });
       setTurns((t) => t.map((x) => (x.id === id ? { ...x, outcome, streaming: undefined } : x)));
@@ -219,6 +221,12 @@ export default function App() {
                 )}
                 {modelProgress && <div className="xsmall muted">{modelProgress.text}</div>}
                 {modelError && <div className="error small">Model failed to load: {modelError}</div>}
+                {engine.chat && (
+                  <label className="xsmall muted strict">
+                    <input type="checkbox" checked={strict} onChange={(e) => setStrict(e.target.checked)} data-testid="strict-toggle" />{' '}
+                    Strict mode: the model checks the snippets before answering (abstains much more often)
+                  </label>
+                )}
               </div>
               {engine.id === 'extractive' &&
                 (modelProgress === null ? (

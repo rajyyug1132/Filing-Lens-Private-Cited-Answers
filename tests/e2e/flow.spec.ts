@@ -60,7 +60,8 @@ test('pre-indexed sample: cited answer, page jump, wrong-company abstain; persis
   await page.getByTestId('question').fill('What was Walmart\'s capital expenditure in fiscal 2023?');
   await page.getByTestId('ask-btn').click();
   await expect(page.getByTestId('abstain-card').last()).toContainText('Stopped at the feature gate');
-  // passes the gate, then the verifier (recorded ABSTAIN) stops it: the cascade's second stage
+  // strict mode on: passes the gate, then the verifier (recorded ABSTAIN) stops it
+  await page.getByTestId('strict-toggle').check();
   await page.getByTestId('question').fill("What was Best Buy's total revenue in fiscal 2023?");
   await page.getByTestId('ask-btn').click();
   await expect(page.getByTestId('abstain-card').last()).toContainText('stopped by the verifier step');
