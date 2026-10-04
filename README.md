@@ -1,8 +1,25 @@
-# Filing Lens: Private Cited Answers
+# Filing Lens
+
+**Private, cited answers over company filings.** Ask a 10-K a question on your phone; get an answer with the page it came from, or an honest "I can't answer that from this filing".
+
+[![Pages](https://github.com/rajyyug1132/Filing-Lens-Private-Cited-Answers/actions/workflows/pages.yml/badge.svg)](https://github.com/rajyyug1132/Filing-Lens-Private-Cited-Answers/actions/workflows/pages.yml)
+![License: MIT](https://img.shields.io/badge/license-MIT-blue)
+
+**Live:** https://rajyyug1132.github.io/Filing-Lens-Private-Cited-Answers/ (tap **Try a sample 10-K** to skip uploading)
+
+[![Filing Lens launch video (21 s)](docs/media/filing-lens-launch.jpg)](docs/media/filing-lens-launch.mp4)
+
+*21-second launch video ([MP4](docs/media/filing-lens-launch.mp4)). Every phone frame is the real app on the bundled Best Buy FY2023 10-K, with no model downloaded (extractive preview).*
 
 Filing Lens lets retail investors ask questions about company filings on their phone and get answers with page citations. A local 3B model (Qwen 2.5, runs on the phone) writes every answer, so the document never leaves the device. A calibrated decision layer checks the retrieved pages before the model runs and abstains when they don't support an answer, showing a confidence score instead of a guess.
 
-**Live (after PR #1 merges to main):** https://rajyyug1132.github.io/Filing-Lens-Private-Cited-Answers/ (tap **Try a sample 10-K** to skip uploading)
+## Contents
+- [How it works](#how-it-works)
+- [Run it](#run-it)
+- [Repository layout](#repository-layout)
+- [Bench (cloud, real numbers)](#bench-cloud-real-numbers)
+- [Limits](#limits)
+- [Data and licences](#data-and-licences)
 
 ## How it works
 
@@ -19,6 +36,32 @@ question ─▶ hybrid retrieval (dense + BM25, RRF, k=8, prompt capped at 3000 
 - **Zero document upload.** pdf.js, the embedding model, the ONNX runtime and wllama are npm packages served from the app's own origin. There are no external script tags. The only third-party request is the one-time model weight download (GET, cached). The e2e test records every request during upload → ask → answer → abstain and asserts 0 requests to other origins and 0 requests with a body (last run: 20 requests, 0 external, 0 with a body).
 - **Feature gate** (`lib/retrieve.ts`, `lib/calibrate.ts`, `lib/decision-model.json`): retrieval-score, word-coverage, entity and year features; class-balanced logistic regression with temperature scaling. It is cheap (0.41 ms) but cannot read content.
 - **Verifier + answerer** are a DSPy program (`bench/lens_program.py`) compiled on Kaggle and exported to `app/prompts/verifier.json`. `lib/dspy-chat.ts` rebuilds DSPy's ChatAdapter prompt in the browser, and `tests/unit/dspy-chat.test.ts` asserts it is identical to DSPy's own rendering. The app ships the program compiled on Kaggle: BootstrapFewShot with 2 demos per predictor (MIPROv2 light was tried and not kept, since its balanced dev score of 0.519 was below 0.548).
+
+## Run it
+
+```bash
+npm ci --ignore-scripts && npm run vendor   # copy pdf.js/ORT/wllama/MiniLM into public/
+npm run build && npm run serve              # static export in out/, http://127.0.0.1:4173
+npm test                                    # unit tests
+npx playwright test                         # e2e (headless Chromium, Pixel 7 emulation) + demo recording
+npm rebuild sharp && npm run bench          # cloud bench (needs FinanceBench at bench/.data/financebench)
+```
+
+Tests use `?engine=fixture`, which replays `public/fixtures/recorded-responses.json` (ChatAdapter-format completions) in place of the model. Those responses are hand-authored for now; replace them with Kaggle-recorded outputs. Everything else in the tests is real: retrieval, gate, DSPy prompt builder and parser, citation check, UI. There is no phone on the build machine, so the e2e suite runs in headless Chromium.
+
+## Repository layout
+
+| Path | What's there |
+|---|---|
+| `app/`, `components/` | Next.js static-export PWA: upload, ask bar, answer and abstain cards, page and privacy sheets |
+| `lib/` | Pipeline: pdf.js text, chunking, BM25 + dense retrieval, feature gate, snippets, DSPy prompt builder, citation check, engines |
+| `app/prompts/verifier.json` | DSPy program compiled on Kaggle, rebuilt byte-for-byte in the browser |
+| `public/` | Service worker, vendored runtimes and models (copied from npm by `scripts/`), pre-indexed sample filing |
+| `bench/` | Cloud bench (`run.ts`), Kaggle notebook, DSPy program and export, ingest, results |
+| `tests/` | Unit tests (`unit/`) and Playwright e2e with the privacy assertion (`e2e/`) |
+| `deck/` | 8-slide deck built from the bench outputs (`build.mjs` → `FilingLens.pdf`) |
+| `demo/` | Demo script, e2e recording, screenshots, privacy log |
+| `docs/media/` | Launch video and poster |
 
 ## Bench (cloud, real numbers)
 
@@ -76,26 +119,9 @@ Test split only: 160 instances (company-grouped): 55 answer, 55 Easy, 50 Hard. O
 ### Kaggle run (T4)
 1. Merge to `main` (the notebook reads its inputs from `main`). Import `bench/kaggle_gen.ipynb` with GPU T4 and Internet on, and Run All. It serves Qwen2.5-3B fp16 with vLLM (`dtype=half`, since the T4 has no bf16; if vLLM won't start it falls back to llama.cpp on the fp16 GGUF), logs exact Qwen2.5 token counts for the worst-case prompts (`token_counts.json`), compiles `Lens` with BootstrapFewShot (2 demos) on the train split, optionally runs MIPROv2 light (kept only if dev improves), then evaluates on the test split with fp16 and with the GGUF Q4_K_M build (llama.cpp).
 2. Download `cascade_results.jsonl`, `token_counts.json`, `app_verifier.json` and `verifier.json`. Commit `app_verifier.json` as `app/prompts/verifier.json`, and the rest to `bench/results/`.
-3. Run `python bench/ingest_gen.py && npm test && node deck/build.mjs`, or push and say "ingest".
+3. Run `python bench/ingest_gen.py && npm test && node deck/build.mjs` after copying the files into `bench/results/`.
 
 `DRY_RUN=1` executes every notebook cell on CPU with DSPy's DummyLM (checked with nbclient). `ingest_gen.py` refuses stub output.
-
-## Run it
-
-```bash
-npm ci --ignore-scripts && npm run vendor   # copy pdf.js/ORT/wllama/MiniLM into public/
-npm run build && npm run serve              # static export in out/, http://127.0.0.1:4173
-npm test                                    # unit tests
-npx playwright test                         # e2e (headless Chromium, Pixel 7 emulation) + demo recording
-npm rebuild sharp && npm run bench          # cloud bench (needs FinanceBench at bench/.data/financebench)
-```
-
-Tests use `?engine=fixture`, which replays `public/fixtures/recorded-responses.json` (ChatAdapter-format completions) in place of the model. Those responses are hand-authored for now; replace them with Kaggle-recorded outputs. Everything else in the tests is real: retrieval, gate, DSPy prompt builder and parser, citation check, UI. There is no phone on the build machine, so the e2e suite runs in headless Chromium.
-
-## Data and licences
-- **FinanceBench** (Islam et al. 2023, arXiv:2311.11944), github.com/patronus-ai/financebench. The GitHub repo has no LICENSE file (the GitHub API reports `license: null`). The Hugging Face dataset card (PatronusAI/financebench) is reported as **CC-BY-NC-4.0**; this could not be checked from the build machine because huggingface.co was blocked (**[ASK: confirm on the card]**). It is used here only for non-commercial evaluation. The PDFs are public SEC filings. `tests/fixtures/BESTBUY_2023_10K.pdf` (also the bundled sample) is Best Buy's FY2023 10-K from that repo.
-- **all-MiniLM-L6-v2** (Apache-2.0), quantised ONNX vendored via the npm package `@ryanstark24/sfgraph-models` (MIT).
-- **Qwen2.5-3B/1.5B-Instruct**: downloaded at runtime by the user's browser, not redistributed here. Check the Qwen licence on the model card before commercial use.
 
 ## Limits
 - The feature gate can't see content: Hard accuracy 0.52. The DSPy-compiled 3B verifier didn't fix that: it abstains on 51–53 of 55 answer cases (Hard 0.495). So the verifier ships **off by default** as an opt-in Strict mode; the default path is gate → cited answer → citation check, and the gate alone is the stronger Easy filter (0.864). Answer accuracy of that default path with the 3B has not been measured (the Kaggle run only generated answers after the verifier).
@@ -103,3 +129,8 @@ Tests use `?engine=fixture`, which replays `public/fixtures/recorded-responses.j
 - A failure found and fixed: Best Buy's 10-K never mentions Walmart, yet "Walmart capex?" passed the gate. Adding a feature for whether the companies a question names appear in the filing fixed it (0.820 → 0.910 on the earlier own-vs-wrong-company bench; `bench/results/history.json`).
 - Answers are auto-graded (number within 1%, else token-F1), an approximation of FinanceBench's human grading.
 - Scanned PDFs (no text layer) are rejected; there is no OCR. Tables are read as flattened text.
+
+## Data and licences
+- **FinanceBench** (Islam et al. 2023, arXiv:2311.11944), github.com/patronus-ai/financebench. The GitHub repo has no LICENSE file (the GitHub API reports `license: null`). The Hugging Face dataset card (PatronusAI/financebench) is reported as **CC-BY-NC-4.0**; this could not be checked from the build machine because huggingface.co was blocked (**[ASK: confirm on the card]**). It is used here only for non-commercial evaluation. The PDFs are public SEC filings. `tests/fixtures/BESTBUY_2023_10K.pdf` (also the bundled sample) is Best Buy's FY2023 10-K from that repo.
+- **all-MiniLM-L6-v2** (Apache-2.0), quantised ONNX vendored via the npm package `@ryanstark24/sfgraph-models` (MIT).
+- **Qwen2.5-3B/1.5B-Instruct**: downloaded at runtime by the user's browser, not redistributed here. Check the Qwen licence on the model card before commercial use.
