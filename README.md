@@ -7,9 +7,9 @@
 
 **Live:** https://rajyyug1132.github.io/Filing-Lens-Private-Cited-Answers/ (tap **Try a sample 10-K** to skip uploading)
 
-[![Filing Lens launch video (21 s)](docs/media/filing-lens-launch.jpg)](docs/media/filing-lens-launch.mp4)
+[![Filing Lens launch video (21 s): ask a 10-K, get the page, tap to open it, honest abstain, 0 bytes sent](docs/media/filing-lens-launch.gif)](docs/media/filing-lens-launch.mp4)
 
-*21-second launch video ([MP4](docs/media/filing-lens-launch.mp4)). Every phone frame is the real app on the bundled Best Buy FY2023 10-K, with no model downloaded (extractive preview).*
+*21-second launch video (silent preview above; click it, or open the [MP4 with sound](docs/media/filing-lens-launch.mp4)). Every phone frame is the real app on the bundled Best Buy FY2023 10-K, with no model downloaded (extractive preview).*
 
 Filing Lens lets retail investors ask questions about company filings on their phone and get answers with page citations. A local 3B model (Qwen 2.5, runs on the phone) writes every answer, so the document never leaves the device. A calibrated decision layer checks the retrieved pages before the model runs and abstains when they don't support an answer, showing a confidence score instead of a guess.
 
