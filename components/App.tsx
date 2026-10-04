@@ -9,12 +9,32 @@ import { readPdf } from '@/lib/pdf-browser';
 import { ask, decisionModel, type Outcome } from '@/lib/pipeline';
 import type { DocIndex } from '@/lib/retrieve';
 import { deleteDoc, listDocs, loadDoc, packVectors, saveDoc, unpackVectors, type StoredDoc } from '@/lib/store';
+import { caseLine } from '@/lib/case-line';
 import { AnswerCard } from './AnswerCard';
 import { PageSheet } from './PageSheet';
 import { PrivacySheet, useNetworkLog } from './PrivacySheet';
+import { Ruler } from './Ruler';
 
 type DocMeta = Awaited<ReturnType<typeof listDocs>>[number];
 type Turn = { id: number; question: string; outcome?: Outcome; streaming?: string; error?: string };
+
+function useOnline() {
+  const [on, setOn] = useState(true);
+  useEffect(() => {
+    const u = () => setOn(navigator.onLine);
+    u();
+    window.addEventListener('online', u);
+    window.addEventListener('offline', u);
+    return () => { window.removeEventListener('online', u); window.removeEventListener('offline', u); };
+  }, []);
+  return on;
+}
+
+// "Reading page 12 of 75" / "Embedding on-device 40/388 chunks" -> a 0..1 ruler value.
+function progressOf(s: string) {
+  const m = /(\d+)\s*(?:of|\/)\s*(\d+)/.exec(s);
+  return m && +m[2] ? { v: +m[1] / +m[2], right: `${m[1]} / ${m[2]}` } : null;
+}
 
 const SUGGESTIONS = ['How much cash did operating activities provide in fiscal 2023?', 'What are the main risk factors?', 'What did Tesla say about Cybertruck production?'];
 
@@ -29,8 +49,10 @@ export default function App() {
   const [turns, setTurns] = useState<Turn[]>([]);
   const [q, setQ] = useState('');
   const [busy, setBusy] = useState(false);
-  const [sheetPage, setSheetPage] = useState<number | null>(null);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [sheet, setSheet] = useState<{ page: number; spans: Record<number, string[]> } | null>(null);
+  const online = useOnline();
   const [strict, setStrict] = useState(false);
   const net = useNetworkLog();
   const fileRef = useRef<HTMLInputElement>(null);
@@ -41,7 +63,7 @@ export default function App() {
     checkWebGPU().then(setGpu);
     if (new URLSearchParams(location.search).get('engine') === 'fixture') loadFixtureEngine().then(setEngine);
   }, []);
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }), [turns]);
+  useEffect(() => { if (turns.length) endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' }); }, [turns]);
 
   const open = useCallback(async (id: string) => {
     const d = await loadDoc(id);
@@ -109,6 +131,23 @@ export default function App() {
     }
   }
 
+  const openSheet = (page: number, o: Outcome) => {
+    const spans: Record<number, string[]> = {};
+    for (const sn of o.snippets) (spans[sn.page] ??= []).push(sn.text);
+    setSheet({ page, spans });
+  };
+
+  async function removeActive() {
+    if (!active) return;
+    if (!confirmDel) { setConfirmDel(true); return; }
+    await deleteDoc(active.meta.id);
+    setDocs(await listDocs());
+    setActive(null);
+    setStatus('');
+    setTurns([]);
+    setConfirmDel(false);
+  }
+
   async function submit(question: string) {
     if (!active || !question.trim() || busy) return;
     const id = Date.now();
@@ -128,147 +167,186 @@ export default function App() {
     }
   }
 
+  const prog = busy && !active ? progressOf(status) : null;
+  const pct = modelProgress ? Math.round(modelProgress.progress * 100) : 0;
   return (
     <div className="shell">
       <header className="top">
-        <div className="brand">
-          <span className="logo" aria-hidden>◎</span>
-          <div>
-            <h1>Filing Lens</h1>
-            <p className="sub">Local 3B · cited · private</p>
+        <div className="top-in">
+          <div className="brand">
+            <h1 className="wordmark">Filing Lens</h1>
+            <p className="tag">Case files / local</p>
           </div>
+          <button className="ledger" onClick={() => setShowPrivacy(true)} data-testid="privacy-pill" title="Where your data goes">
+            <span className={`mark${online ? '' : ' off'}`} aria-hidden />
+            <span className="led-t">{net.docBytesSent} B SENT · {online ? 'ON-DEVICE' : 'OFFLINE'}</span>
+          </button>
         </div>
-        <button className="privacy-pill" onClick={() => setShowPrivacy(true)} data-testid="privacy-pill">
-          <span className="dot" /> {net.docBytesSent} doc bytes sent
-        </button>
+        <div className="ticks" aria-hidden />
       </header>
 
-      <main>
-        {!active && (
-          <section className="card hero">
-            <h2>Ask your annual report anything.</h2>
-            <p>
-              The PDF is read, indexed and answered <b>on this device</b>. Every answer cites its page, and when the filing doesn’t support an
-              answer, Filing Lens says so instead of guessing.
-            </p>
-            <div className="row">
-              <button className="primary" onClick={() => fileRef.current?.click()} disabled={busy} data-testid="upload-btn">
-                {busy ? status || 'Working…' : 'Open a filing PDF'}
-              </button>
-              <button className="secondary" onClick={loadSample} disabled={busy} data-testid="sample-btn">Try a sample 10-K</button>
-            </div>
-            {status && !busy && <p className="muted small" data-testid="status">{status}</p>}
-            {docs.length > 0 && (
-              <ul className="doclist">
-                {docs.map((d) => (
-                  <li key={d.id}>
-                    <button className="link" onClick={() => open(d.id)}>
-                      {d.name} <span className="muted">· {d.pages} pages</span>
-                    </button>
-                    <button
-                      className="ghost small"
-                      aria-label={`Delete ${d.name}`}
-                      onClick={async () => {
-                        await deleteDoc(d.id);
-                        setDocs(await listDocs());
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            )}
+      <main className={`grid${active ? ' has-doc' : ''}`}>
+        {active && (
+          <section className="case" aria-label="Filing">
+              <div className="casebar">
+                <p className="caseline">{caseLine(active.meta.name, active.meta.pages)}</p>
+                <div className="casebar-row">
+                  <h2 className="casename" data-testid="doc-name">{active.meta.name}</h2>
+                  <div className="acts">
+                    <button className="textbtn label" style={{ color: 'var(--ink)' }} onClick={() => { setActive(null); setStatus(''); setConfirmDel(false); }}>Switch</button>
+                    <button className="textbtn label" style={{ color: 'var(--ink)' }} onClick={removeActive} aria-label={confirmDel ? 'Confirm delete' : 'Delete this filing from the device'}>{confirmDel ? 'Confirm' : 'Delete'}</button>
+                  </div>
+                </div>
+                <p className="status" data-testid="status">{status || `${active.meta.pages} pages · stored locally`}</p>
+              </div>
           </section>
         )}
-        <input
-          ref={fileRef}
-          type="file"
-          accept="application/pdf"
-          hidden
-          data-testid="file-input"
-          onChange={(e) => {
-            const f = e.target.files?.[0];
-            if (f) onFile(f);
-            e.target.value = '';
-          }}
-        />
-
-        {active && (
-          <>
-            <section className="card docbar">
-              <div>
-                <div className="docname" data-testid="doc-name">{active.meta.name}</div>
-                <div className="muted small" data-testid="status">{status || `${active.meta.pages} pages · stored locally`}</div>
+        <aside className="rail" aria-label="Model and mode">
+          {!online && (
+            <div className="rail-block">
+              <span className="label">Offline</span>
+              <p className="small">No connection. Indexed filings and a cached model still work.</p>
+            </div>
+          )}
+          <div className="rail-block">
+            <span className="label">Model</span>
+            <div className="eng" data-testid="engine-label">{engine.label}</div>
+            <p className="rail-long">
+              {engine.id === 'extractive'
+                ? 'Quotes matching sentences verbatim until a model is downloaded.'
+                : engine.id === 'fixture'
+                  ? 'Test mode: replays recorded responses.'
+                  : 'Running fully in this browser.'}
+            </p>
+            {engine.id === 'extractive' && gpu && (
+              <div className="gpu" data-testid="gpu-check">
+                {gpu.webgpu ? '✓' : '✕'} {gpu.detail} → {gpu.webgpu ? 'Qwen2.5-3B (≈2 GB)' : 'Qwen2.5-1.5B on CPU (≈1 GB)'}
               </div>
-              <button className="ghost small" onClick={() => { setActive(null); setStatus(''); }}>Switch</button>
-            </section>
-
-            <section className="card engine">
-              <div>
-                <div className="small strong" data-testid="engine-label">{engine.label}</div>
-                <div className="muted small">
-                  {engine.id === 'extractive'
-                    ? 'Quotes matching sentences verbatim until a model is downloaded.'
-                    : engine.id === 'fixture'
-                      ? 'Test mode: replays recorded responses.'
-                      : 'Running fully in this browser.'}
-                </div>
-                {engine.id === 'extractive' && gpu && (
-                  <div className="xsmall muted" data-testid="gpu-check">
-                    {gpu.webgpu ? '✓' : '✕'} {gpu.detail} → {gpu.webgpu ? 'Qwen2.5-3B (≈2 GB)' : 'Qwen2.5-1.5B on CPU (≈1 GB)'}
-                  </div>
-                )}
-                {modelProgress && <div className="xsmall muted">{modelProgress.text}</div>}
-                {modelError && <div className="error small">Model failed to load: {modelError}</div>}
-                {engine.chat && (
-                  <label className="xsmall muted strict">
-                    <input type="checkbox" checked={strict} onChange={(e) => setStrict(e.target.checked)} data-testid="strict-toggle" />{' '}
-                    Strict mode: the model checks the snippets before answering (abstains much more often)
-                  </label>
-                )}
+            )}
+            {engine.id === 'extractive' && modelProgress !== null && (
+              <div className="dl" aria-label="Model download progress">
+                <Ruler value={modelProgress.progress} compact ariaLabel="Model download progress" />
+                <p className="cap"><span>{modelProgress.text}</span><span>{pct}%</span></p>
               </div>
-              {engine.id === 'extractive' &&
-                (modelProgress === null ? (
-                  <button className="secondary small" onClick={loadModel} data-testid="load-model">Download model</button>
-                ) : (
-                  <div className="progress" aria-label="Model download progress"><div style={{ width: `${Math.round(modelProgress.progress * 100)}%` }} /><span>{Math.round(modelProgress.progress * 100)}%</span></div>
-                ))}
-            </section>
+            )}
+            {modelError && (
+              <div className="errbox"><span className="label">Error</span><p className="small">Model failed to load: {modelError}</p></div>
+            )}
+            <div className="rail-act">
+              {engine.id === 'extractive' && modelProgress === null && (
+                <button className="btn small" onClick={loadModel} data-testid="load-model">Download model</button>
+              )}
+              <p className="cap" style={{ marginTop: 8 }}>{engine.id === 'extractive' ? 'Works offline once cached' : 'Runs in this browser. Works offline.'}</p>
+            </div>
+          </div>
+          <div className="rail-block">
+            <span className="label">Mode</span>
+            <label className="switch">
+              <input type="checkbox" checked={strict} disabled={!engine.chat} onChange={(e) => setStrict(e.target.checked)} data-testid="strict-toggle" aria-label="Strict mode" />
+              <span className="sw-track" aria-hidden><span className="sw-knob" /></span>
+              <span className="sw-text">STRICT · {strict ? 'ON' : 'OFF'}</span>
+            </label>
+            <p className="rail-long">{engine.chat ? 'The model checks the snippets before it answers. It abstains much more often.' : 'Needs the model.'}</p>
+          </div>
+        </aside>
 
-            <div className="thread">
-              {turns.length === 0 && (
-                <div className="suggest">
-                  {SUGGESTIONS.map((s) => (
-                    <button key={s} className="chip-q" onClick={() => submit(s)} disabled={busy}>{s}</button>
-                  ))}
+        <section className="stage">
+          {!active && (
+            <>
+              <h2 className="display">Ask the filing.</h2>
+              <p className="lede">Every answer cites its page. When the filing is silent, so is Filing Lens.</p>
+              <div className="actions">
+                <button className="btn solid" onClick={() => fileRef.current?.click()} disabled={busy} data-testid="upload-btn">
+                  {busy ? 'Indexing…' : 'Open a filing PDF'}
+                </button>
+                <button className="btn" onClick={loadSample} disabled={busy} data-testid="sample-btn">Try a sample 10-K</button>
+              </div>
+              {busy && (
+                <div className="dl" style={{ maxWidth: 480, marginTop: 24 }} role="status">
+                  {prog && <Ruler value={prog.v} compact ariaLabel="Indexing progress" />}
+                  <p className="cap"><span>{status || 'Working…'}</span>{prog && <span>{prog.right}</span>}</p>
                 </div>
               )}
-              {turns.map((t) => (
-                <div key={t.id} className="turn">
-                  <div className="bubble-q">{t.question}</div>
-                  {t.error && <div className="card error">{t.error}</div>}
-                  {!t.outcome && !t.error && (
-                    <div className="card pending" data-testid="pending">{t.streaming ? t.streaming : 'Retrieving pages and scoring confidence…'}</div>
-                  )}
-                  {t.outcome && <AnswerCard outcome={t.outcome} threshold={decisionModel.threshold} onPage={setSheetPage} />}
-                </div>
-              ))}
-              <div ref={endRef} />
-            </div>
-          </>
-        )}
+              {status && !busy && <p className="status" data-testid="status">{status}</p>}
+              {docs.length > 0 && (
+                <ul className="doclist">
+                  <li><span className="label">On this device</span></li>
+                  {docs.map((d) => (
+                    <li key={d.id}>
+                      <button className="link" onClick={() => open(d.id)}>
+                        {d.name} <span>· {d.pages} pages</span>
+                      </button>
+                      <button
+                        className="textbtn"
+                        aria-label={`Delete ${d.name}`}
+                        onClick={async () => {
+                          await deleteDoc(d.id);
+                          setDocs(await listDocs());
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
+          )}
+          <input
+            ref={fileRef}
+            type="file"
+            accept="application/pdf"
+            hidden
+            data-testid="file-input"
+            onChange={(e) => {
+              const f = e.target.files?.[0];
+              if (f) onFile(f);
+              e.target.value = '';
+            }}
+          />
+
+          {active && (
+            <>
+              <div className="thread">
+                {turns.length === 0 && (
+                  <div className="suggest">
+                    <span className="label">Try</span>
+                    {SUGGESTIONS.map((s) => (
+                      <button key={s} onClick={() => submit(s)} disabled={busy}>{s}<span aria-hidden>→</span></button>
+                    ))}
+                  </div>
+                )}
+                {turns.map((t, i) => (
+                  <article key={t.id} className="turn">
+                    <div className="idx">{String(i + 1).padStart(2, '0')}</div>
+                    <div className="body">
+                      <p className="q"><span className="label">Question</span>{t.question}</p>
+                      {t.error && <div className="errbox"><span className="label">Error</span><p>{t.error}</p></div>}
+                      {!t.outcome && !t.error && (
+                        <div className="pending" data-testid="pending" role="status">
+                          <span className="label">Searching this filing</span>
+                          <p>{t.streaming ? t.streaming : 'Retrieving pages and scoring confidence…'}</p>
+                          <div className="sweep" aria-hidden />
+                        </div>
+                      )}
+                      {t.outcome && <AnswerCard outcome={t.outcome} threshold={decisionModel.threshold} onPage={(p) => openSheet(p, t.outcome!)} />}
+                    </div>
+                  </article>
+                ))}
+                <div ref={endRef} className="end" />
+              </div>
+
+              <form className="askbar" onSubmit={(e) => { e.preventDefault(); submit(q); }}>
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ask about this filing…" aria-label="Question" data-testid="question" enterKeyHint="send" />
+                <button className="btn solid" disabled={busy || !q.trim()} data-testid="ask-btn">Ask</button>
+              </form>
+            </>
+          )}
+        </section>
       </main>
 
-      {active && (
-        <form className="askbar" onSubmit={(e) => { e.preventDefault(); submit(q); }}>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Ask about this filing…" aria-label="Question" data-testid="question" enterKeyHint="send" />
-          <button className="primary" disabled={busy || !q.trim()} data-testid="ask-btn">Ask</button>
-        </form>
-      )}
-
-      {sheetPage !== null && active && (
-        <PageSheet bytes={active.bytes} page={sheetPage} total={active.meta.pages} index={active.index} onClose={() => setSheetPage(null)} onPage={setSheetPage} />
+      {sheet && active && (
+        <PageSheet bytes={active.bytes} page={sheet.page} total={active.meta.pages} index={active.index} spans={sheet.spans} onClose={() => setSheet(null)} onPage={(p) => setSheet({ ...sheet, page: p })} />
       )}
       {showPrivacy && <PrivacySheet log={net} onClose={() => setShowPrivacy(false)} />}
     </div>

@@ -61,6 +61,7 @@ Tests use `?engine=fixture`, which replays `public/fixtures/recorded-responses.j
 | `tests/` | Unit tests (`unit/`) and Playwright e2e with the privacy assertion (`e2e/`) |
 | `deck/` | 8-slide deck built from the bench outputs (`build.mjs` → `FilingLens.pdf`) |
 | `demo/` | Demo script, e2e recording, screenshots, privacy log |
+| `scripts/ui-shots.mjs` | UI QA: screenshots every state at 390 and 1440 px, light and dark, plus a tap-target and overflow audit |
 | `docs/media/` | Launch video and poster |
 
 ## Bench (cloud, real numbers)
@@ -124,6 +125,7 @@ Test split only: 160 instances (company-grouped): 55 answer, 55 Easy, 50 Hard. O
 `DRY_RUN=1` executes every notebook cell on CPU with DSPy's DummyLM (checked with nbclient). `ingest_gen.py` refuses stub output.
 
 ## Limits
+- **The 3B verifier abstains too much; off by default.** It ships as an opt-in Strict mode (gate → verifier); the default path is gate → cited answer → citation check.
 - The feature gate can't see content: Hard accuracy 0.52. The DSPy-compiled 3B verifier didn't fix that: it abstains on 51–53 of 55 answer cases (Hard 0.495). So the verifier ships **off by default** as an opt-in Strict mode; the default path is gate → cited answer → citation check, and the gate alone is the stronger Easy filter (0.864). Answer accuracy of that default path with the 3B has not been measured (the Kaggle run only generated answers after the verifier).
 - Retrieval is the bottleneck: gold-page recall@4 0.440, @8 0.633. Under the 3k cap the 3B sees the gold page 57% of the time, and the sentence snippets keep it 53% of the time.
 - A failure found and fixed: Best Buy's 10-K never mentions Walmart, yet "Walmart capex?" passed the gate. Adding a feature for whether the companies a question names appear in the filing fixed it (0.820 → 0.910 on the earlier own-vs-wrong-company bench; `bench/results/history.json`).
