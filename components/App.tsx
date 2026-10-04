@@ -6,10 +6,12 @@ import { BASE } from '@/lib/env';
 import { hydrate, indexPages } from '@/lib/index-doc';
 import { checkWebGPU, extractiveEngine, loadFixtureEngine, loadWebLLM, loadWllama, type Engine, type GpuCheck } from '@/lib/llm';
 import { readPdf } from '@/lib/pdf-browser';
-import { ask, decisionModel, type Outcome } from '@/lib/pipeline';
+import { ask, type Outcome } from '@/lib/pipeline';
 import type { DocIndex } from '@/lib/retrieve';
 import { deleteDoc, listDocs, loadDoc, packVectors, saveDoc, unpackVectors, type StoredDoc } from '@/lib/store';
 import { caseLine } from '@/lib/case-line';
+import { classifyDoc, type DocType } from '@/lib/doc-type';
+import { deriveCandidates, parseQuestions, validateSuggestions, type Suggestion } from '@/lib/suggest';
 import { AnswerCard } from './AnswerCard';
 import { PageSheet } from './PageSheet';
 import { PrivacySheet, useNetworkLog } from './PrivacySheet';
@@ -36,11 +38,11 @@ function progressOf(s: string) {
   return m && +m[2] ? { v: +m[1] / +m[2], right: `${m[1]} / ${m[2]}` } : null;
 }
 
-const SUGGESTIONS = ['How much cash did operating activities provide in fiscal 2023?', 'What are the main risk factors?', 'What did Tesla say about Cybertruck production?'];
 
 export default function App() {
   const [docs, setDocs] = useState<DocMeta[]>([]);
-  const [active, setActive] = useState<{ meta: DocMeta; index: DocIndex; bytes: ArrayBuffer } | null>(null);
+  const [active, setActive] = useState<{ meta: DocMeta; index: DocIndex; bytes: ArrayBuffer; docType: DocType } | null>(null);
+  const [sug, setSug] = useState<{ status: 'loading' | 'ready'; items: Suggestion[]; closest: number[] }>({ status: 'loading', items: [], closest: [] });
   const [status, setStatus] = useState<string>('');
   const [engine, setEngine] = useState<Engine>(extractiveEngine);
   const [modelProgress, setModelProgress] = useState<{ progress: number; text: string } | null>(null);
@@ -68,7 +70,7 @@ export default function App() {
   const open = useCallback(async (id: string) => {
     const d = await loadDoc(id);
     if (!d) return;
-    setActive({ meta: d, index: hydrate(d.chunks, unpackVectors(d.vectors, d.dim)), bytes: d.bytes });
+    setActive({ meta: d, index: hydrate(d.chunks, unpackVectors(d.vectors, d.dim)), bytes: d.bytes, docType: d.docType ?? classifyDoc(d.chunks) });
     setTurns([]);
   }, []);
 
@@ -81,10 +83,10 @@ export default function App() {
       if (!pages.some((p) => p.text.trim())) throw new Error('No selectable text in this PDF (scanned image?). OCR is not supported yet.');
       const index = await indexPages(pages, embed, (d, t) => setStatus(`Embedding on-device ${d}/${t} chunks`));
       const { buffer, dim } = packVectors(index.vectors);
-      const doc: StoredDoc = { id: crypto.randomUUID(), name: f.name, pages: pages.length, chunks: index.chunks, vectors: buffer, dim, bytes, createdAt: Date.now() };
+      const doc: StoredDoc = { id: crypto.randomUUID(), name: f.name, pages: pages.length, chunks: index.chunks, vectors: buffer, dim, bytes, createdAt: Date.now(), docType: classifyDoc(pages) };
       await saveDoc(doc);
       setDocs(await listDocs());
-      setActive({ meta: doc, index, bytes });
+      setActive({ meta: doc, index, bytes, docType: doc.docType! });
       setTurns([]);
       setStatus(`Indexed ${pages.length} pages · ${index.chunks.length} chunks · stored in this browser only`);
     } catch (e) {
@@ -104,10 +106,10 @@ export default function App() {
         fetch(`${dir}/vectors.f32`).then((r) => r.arrayBuffer()),
         fetch(`${dir}/filing.pdf`).then((r) => r.arrayBuffer()),
       ]);
-      const doc: StoredDoc = { id: 'sample-bestbuy-2023', name: meta.name, pages: meta.pages, chunks: meta.chunks, vectors: vec, dim: meta.dim, bytes: pdf, createdAt: Date.now() };
+      const doc: StoredDoc = { id: 'sample-bestbuy-2023', name: meta.name, pages: meta.pages, chunks: meta.chunks, vectors: vec, dim: meta.dim, bytes: pdf, createdAt: Date.now(), docType: classifyDoc(meta.chunks) };
       await saveDoc(doc);
       setDocs(await listDocs());
-      setActive({ meta: doc, index: hydrate(doc.chunks, unpackVectors(vec, meta.dim)), bytes: pdf });
+      setActive({ meta: doc, index: hydrate(doc.chunks, unpackVectors(vec, meta.dim)), bytes: pdf, docType: doc.docType! });
       setTurns([]);
       setStatus(`Sample loaded: ${meta.pages} pages · ${meta.chunks.length} chunks · pre-indexed`);
     } catch (e) {
@@ -131,6 +133,35 @@ export default function App() {
     }
   }
 
+  // Questions derived from the document's own text, shown only if they pass the routed gate.
+  useEffect(() => {
+    if (!active) return;
+    let live = true;
+    setSug({ status: 'loading', items: [], closest: [] });
+    const pages = new Map<number, string>();
+    for (const c of active.index.chunks) pages.set(c.page, (pages.get(c.page) ?? '') + ' ' + c.text);
+    const cands = deriveCandidates([...pages].map(([page, text]) => ({ page, text })), active.docType);
+    validateSuggestions(active.index, active.docType, cands, embed)
+      .then((v) => live && setSug({ status: 'ready', items: v.shown, closest: v.closest }))
+      .catch(() => live && setSug({ status: 'ready', items: [], closest: [] }));
+    return () => { live = false; };
+  }, [active]);
+
+  async function suggestMore() {
+    if (!active || !engine.chat || busy) return;
+    setBusy(true);
+    try {
+      const src = Array.from(new Set([...sug.items.map((s) => s.page), ...sug.closest])).slice(0, 3);
+      const text = active.index.chunks.filter((c) => src.includes(c.page)).map((c) => `[p.${c.page}] ${c.text}`).join('\n').slice(0, 2400);
+      const raw = await engine.chat([{ role: 'system', content: 'Write short questions that the given text answers. One question per line. No numbering.' }, { role: 'user', content: `Text:\n${text}\n\nWrite 4 questions that this text answers.` }], 160);
+      const cands = parseQuestions(raw).map((q) => ({ q, page: src[0] ?? 1, kind: 'term' as const }));
+      const v = await validateSuggestions(active.index, active.docType, cands, embed);
+      setSug((s) => ({ ...s, items: [...s.items, ...v.shown.filter((x) => !s.items.some((y) => y.q === x.q))] }));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   const openSheet = (page: number, o: Outcome) => {
     const spans: Record<number, string[]> = {};
     for (const sn of o.snippets) (spans[sn.page] ??= []).push(sn.text);
@@ -148,15 +179,17 @@ export default function App() {
     setConfirmDel(false);
   }
 
-  async function submit(question: string) {
+  async function submit(question: string, force = false, id = Date.now()) {
     if (!active || !question.trim() || busy) return;
-    const id = Date.now();
-    setTurns((t) => [...t, { id, question }]);
+    if (force) setTurns((t) => t.map((x) => (x.id === id ? { id, question } : x)));
+    else setTurns((t) => [...t, { id, question }]);
     setQ('');
     setBusy(true);
     try {
       const outcome = await ask(active.index, question, embed, engine, {
         strict,
+        force,
+        docType: active.docType,
         onText: (s) => setTurns((t) => t.map((x) => (x.id === id ? { ...x, streaming: s } : x))),
       });
       setTurns((t) => t.map((x) => (x.id === id ? { ...x, outcome, streaming: undefined } : x)));
@@ -190,6 +223,7 @@ export default function App() {
           <section className="case" aria-label="Filing">
               <div className="casebar">
                 <p className="caseline">{caseLine(active.meta.name, active.meta.pages)}</p>
+                {active.docType === 'GENERAL' && <p className="caseline" data-testid="doc-type">GENERAL DOCUMENT · gate tuned for annual reports</p>}
                 <div className="casebar-row">
                   <h2 className="casename" data-testid="doc-name">{active.meta.name}</h2>
                   <div className="acts">
@@ -309,11 +343,23 @@ export default function App() {
             <>
               <div className="thread">
                 {turns.length === 0 && (
-                  <div className="suggest">
-                    <span className="label">Try</span>
-                    {SUGGESTIONS.map((s) => (
-                      <button key={s} onClick={() => submit(s)} disabled={busy}>{s}<span aria-hidden>→</span></button>
+                  <div className="suggest" data-testid="suggest">
+                    <span className="label">{sug.status === 'loading' ? 'Reading the document for questions…' : 'Questions from this document'}</span>
+                    {sug.items.map((s) => (
+                      <button key={s.q} onClick={() => submit(s.q)} disabled={busy} data-testid="suggestion" data-page={s.page} data-q={s.q}>{s.q}<span aria-hidden>p.{s.page}</span></button>
                     ))}
+                    {sug.status === 'ready' && sug.items.length === 0 && (
+                      <div className="own" data-testid="suggest-fallback">
+                        <p className="reason">Ask your own question below.</p>
+                        {sug.closest.length > 0 && (
+                          <div className="pages">
+                            <span className="label">Closest pages</span>
+                            <div className="tabs">{sug.closest.map((p) => <button key={p} className="tabbtn" onClick={() => setSheet({ page: p, spans: {} })} aria-label={`Open page ${p}`}><span className="tab">p.{p}</span></button>)}</div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {engine.chat && sug.status === 'ready' && <button className="textbtn more" onClick={suggestMore} disabled={busy} data-testid="suggest-more">Suggest more</button>}
                   </div>
                 )}
                 {turns.map((t, i) => (
@@ -329,7 +375,7 @@ export default function App() {
                           <div className="sweep" aria-hidden />
                         </div>
                       )}
-                      {t.outcome && <AnswerCard outcome={t.outcome} threshold={decisionModel.threshold} onPage={(p) => openSheet(p, t.outcome!)} />}
+                      {t.outcome && <AnswerCard outcome={t.outcome} threshold={t.outcome.threshold} onPage={(p) => openSheet(p, t.outcome!)} onForce={() => submit(t.question, true, t.id)} />}
                     </div>
                   </article>
                 ))}

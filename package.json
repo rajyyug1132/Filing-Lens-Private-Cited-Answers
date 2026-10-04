@@ -15,7 +15,8 @@
     "test:e2e": "playwright test tests/e2e/flow.spec.ts",
     "demo:record": "playwright test tests/e2e/demo.spec.ts",
     "bench": "tsx bench/run.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "bench:general": "tsx bench/general_gate.ts"
   },
   "devDependencies": {
     "@cyberlangke/tokkit-qwen": "^1.11.0",

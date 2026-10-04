@@ -12,6 +12,7 @@ export interface StoredDoc {
   dim: number;
   bytes: ArrayBuffer; // original PDF, for rendering cited pages
   createdAt: number;
+  docType?: 'FILING' | 'GENERAL'; // missing on documents stored before classification existed
 }
 
 let dbp: Promise<IDBPDatabase> | null = null;
