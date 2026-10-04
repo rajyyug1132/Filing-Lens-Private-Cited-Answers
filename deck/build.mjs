@@ -35,13 +35,13 @@ const slides = [
    <div class="cols"><div><p class="lead">Retail investors are handed 100-page 10-Ks. Chatbots answer anyway, with no page reference, and the filing gets uploaded to someone else's server.</p>
    <p>FinanceBench (Islam et al., 2023, arXiv:2311.11944): GPT-4-Turbo with a retrieval system <b>incorrectly answered or refused 81%</b> of 150 open-book filing questions.</p>
    <p class="kicker">Problem: wrong answers look the same as right ones, and privacy is the price of asking.</p></div></div>`,
-  `<h1>Demo</h1><div class="shots">${['demo/answer.png', 'demo/page.png', 'demo/abstain.png'].map((p, i) => (img(p) ? `<figure><img src="${img(p)}"/><figcaption>${['Cited answer + calibrated confidence', 'Citation chip opens the page', 'Wrong-company question → abstain'][i]}</figcaption></figure>` : '')).join('')}</div>
-   <p class="small">Recorded in headless Chromium at Pixel-7 size with recorded model responses (the build machine can't download weights). Phone video: ${ask('phone recording link')}.</p>`,
+  `<h1>Demo</h1><div class="shots">${['deck/shots/answer.png', 'deck/shots/page.png', 'deck/shots/abstain.png'].map((p, i) => (img(p) ? `<figure><img src="${img(p)}"/><figcaption>${['Cited answer + confidence ruler', 'Page tab opens the PDF, cited sentences highlighted', 'Wrong company → NOT IN THIS FILING'][i]}</figcaption></figure>` : '')).join('')}</div>
+   <p class="small">Screens from the case-file UI at main <code>dd0071e</code>: headless Chromium, 390 px wide, extractive preview (no model downloaded, so the app quotes the filing). Launch video: <code>brag-output/brag.mp4</code>. Phone recording: ${ask('phone recording link')}.</p>`,
   `<h1>Privacy proof</h1><div class="cols"><div>
    <p class="lead">The document never leaves the device. The build's e2e test enforces this; it isn't just claimed.</p>
    ${priv ? `<table class="kv"><tr><td>Requests during upload → index → ask → abstain</td><td><b>${priv.total}</b></td></tr><tr><td>to any host other than the app's own origin</td><td><b>${priv.external}</b></td></tr><tr><td>carrying a request body (POST/PUT/beacon)</td><td><b>${priv.withBody}</b></td></tr></table>` : ask('privacy log missing')}
    <ul><li>pdf.js, MiniLM embeddings, ONNX runtime, wllama: npm packages served from the app origin, no external scripts</li><li>Index + PDF stored in IndexedDB</li><li>Only third-party fetch: the Qwen2.5 weights (GET, once, then cached). Airplane mode after that: ${ask('confirm on phone')}</li></ul></div>
-   ${img('demo/privacy.png') ? `<img class="phone" src="${img('demo/privacy.png')}"/>` : ''}</div>`,
+   ${img('deck/shots/privacy.png') ? `<img class="phone" src="${img('deck/shots/privacy.png')}"/>` : ''}</div>`,
   `<h1>Architecture: a two-stage cascade</h1><div class="arch">
    <div class="flow"><span>PDF</span>→<span>pdf.js page text</span>→<span>page-bounded chunks</span>→<span>MiniLM embeddings</span>→<span>IndexedDB</span></div>
    <div class="flow"><span>Question</span>→<span>hybrid retrieval<br/>dense + BM25, k=${R.k}, ≤${R.tokenBudget} tok</span>→<span class="key">① feature gate<br/>${nFeat} features → LR ÷ T<br/>${gate.latency_p50_ms.toFixed(2)} ms</span>→<span class="key2">② DSPy verifier on the 3B<br/>ANSWER / ABSTAIN + evidence page</span>→<span>DSPy cited answer<br/>Qwen2.5-3B, WebGPU</span>→<span>[p.N] check</span></div>
