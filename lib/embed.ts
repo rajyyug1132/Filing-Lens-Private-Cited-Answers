@@ -18,6 +18,15 @@ function getWorker(): Worker {
     for (let i = 0; i < flat.length / dim; i++) out.push(flat.slice(i * dim, (i + 1) * dim));
     p.resolve(out);
   };
+  const fail = () => {
+    const err = new Error('The on-device search worker could not start. Reload the page and try again.');
+    for (const p of pending.values()) p.reject(err);
+    pending.clear();
+    worker?.terminate();
+    worker = null; // the next question starts a fresh worker
+  };
+  worker.onerror = fail;
+  worker.onmessageerror = fail;
   return worker;
 }
 

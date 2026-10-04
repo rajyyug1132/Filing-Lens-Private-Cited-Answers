@@ -1,5 +1,17 @@
 import type { Metadata, Viewport } from 'next';
+import localFont from 'next/font/local';
 import './globals.css';
+
+const serif = localFont({ src: '../node_modules/@fontsource/newsreader/files/newsreader-latin-400-normal.woff2', weight: '400', display: 'swap', variable: '--font-serif' });
+const sans = localFont({
+  src: [
+    { path: '../node_modules/@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-400-normal.woff2', weight: '400' },
+    { path: '../node_modules/@fontsource/ibm-plex-sans/files/ibm-plex-sans-latin-500-normal.woff2', weight: '500' },
+  ],
+  display: 'swap',
+  variable: '--font-sans',
+});
+const mono = localFont({ src: '../node_modules/@fontsource/ibm-plex-mono/files/ibm-plex-mono-latin-400-normal.woff2', weight: '400', display: 'swap', variable: '--font-mono' });
 
 const base = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 
@@ -14,14 +26,14 @@ export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
   themeColor: [
-    { media: '(prefers-color-scheme: light)', color: '#f7f6f2' },
-    { media: '(prefers-color-scheme: dark)', color: '#141413' },
+    { media: '(prefers-color-scheme: light)', color: '#f1eee7' },
+    { media: '(prefers-color-scheme: dark)', color: '#121212' },
   ],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    <html lang="en" className={`${serif.variable} ${sans.variable} ${mono.variable}`}>
       <body>
         {children}
         <script

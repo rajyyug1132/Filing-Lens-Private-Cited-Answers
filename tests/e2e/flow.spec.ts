@@ -13,7 +13,7 @@ test('upload → cited answer → abstain, with zero outbound document requests'
   page.on('worker', (w) => workerReqs.push(w.url()));
 
   await page.goto('/?engine=fixture');
-  await expect(page.getByTestId('engine-label').or(page.getByTestId('upload-btn'))).toBeVisible();
+  await expect(page.getByTestId('upload-btn')).toBeVisible();
   await page.getByTestId('file-input').setInputFiles(PDF);
   await expect(page.getByTestId('doc-name')).toHaveText('BESTBUY_2023_10K.pdf', { timeout: 200_000 });
   await expect(page.getByTestId('engine-label')).toContainText('Recorded responses');
@@ -47,7 +47,7 @@ test('upload → cited answer → abstain, with zero outbound document requests'
   writeFileSync('demo/privacy-log.json', JSON.stringify({ total: requests.length, external: external.length, withBody: withBody.length, browser: 'headless Chromium (Playwright), Pixel 7 emulation' }, null, 2));
   expect(external.map((r) => r.url())).toEqual([]);
   expect(withBody.map((r) => `${r.method()} ${r.url()}`)).toEqual([]);
-  await expect(page.getByTestId('privacy-pill')).toContainText('0 doc bytes sent');
+  await expect(page.getByTestId('privacy-pill')).toContainText('0 B SENT');
 });
 
 test('pre-indexed sample: cited answer, page jump, wrong-company abstain; persists across reload', async ({ page }) => {
@@ -67,4 +67,35 @@ test('pre-indexed sample: cited answer, page jump, wrong-company abstain; persis
   await expect(page.getByTestId('abstain-card').last()).toContainText('stopped by the verifier step');
   await page.reload();
   await expect(page.getByRole('button', { name: /^Best Buy FY2023 10-K/ })).toBeVisible();
+});
+
+test('default mode (gate only): the verifier is off and no verifier call is made', async ({ page }) => {
+  await page.goto('/?engine=fixture');
+  await page.getByTestId('sample-btn').click();
+  await expect(page.getByTestId('doc-name')).toContainText('Best Buy FY2023 10-K');
+  await expect(page.getByTestId('strict-toggle')).not.toBeChecked();
+  await expect(page.getByText('STRICT · OFF')).toBeVisible();
+  await page.getByTestId('question').fill('How much cash did operating activities provide in fiscal 2023?');
+  await page.getByTestId('ask-btn').click();
+  const card = page.getByTestId('answer-card');
+  await expect(card.getByTestId('cite-chip').first()).toHaveText('p.42');
+  await expect(card).toContainText('no verifier');
+  // the gate still blocks the wrong company without any model call
+  await page.getByTestId('question').fill("What was Walmart's capital expenditure in fiscal 2023?");
+  await page.getByTestId('ask-btn').click();
+  await expect(page.getByTestId('abstain-card').last()).toContainText('Stopped at the feature gate');
+});
+
+test('strict mode: gate -> verifier; the verifier can stop a question the gate passed', async ({ page }) => {
+  await page.goto('/?engine=fixture');
+  await page.getByTestId('sample-btn').click();
+  await expect(page.getByTestId('doc-name')).toContainText('Best Buy FY2023 10-K');
+  await page.getByTestId('strict-toggle').check();
+  await expect(page.getByText('STRICT · ON')).toBeVisible();
+  await page.getByTestId('question').fill('How much cash did operating activities provide in fiscal 2023?');
+  await page.getByTestId('ask-btn').click();
+  await expect(page.getByTestId('answer-card')).toContainText('verifier: ANSWER (p.42)');
+  await page.getByTestId('question').fill("What was Best Buy's total revenue in fiscal 2023?");
+  await page.getByTestId('ask-btn').click();
+  await expect(page.getByTestId('abstain-card').last()).toContainText('stopped by the verifier step');
 });

@@ -3,8 +3,9 @@
 import { Fragment } from 'react';
 import { CITE_SOURCE, parseCitations } from '@/lib/cite';
 import type { Outcome } from '@/lib/pipeline';
+import { Ruler } from './Ruler';
 
-// Same pattern lib/cite.ts validates with, so every accepted citation gets a chip.
+// Same pattern lib/cite.ts validates with, so every accepted citation gets a page tab.
 const CITE_SPLIT = new RegExp(`(${CITE_SOURCE.replace('(\\d+', '(?:\\d+')})`, 'gi');
 const IS_CITE = new RegExp(`^${CITE_SOURCE}$`, 'i');
 
@@ -18,7 +19,7 @@ function Cited({ text, onPage }: { text: string; onPage: (p: number) => void }) 
           <Fragment key={i}>
             {pages.map((p) => (
               <button key={p} className="cite" onClick={() => onPage(p)} data-testid="cite-chip" aria-label={`Open page ${p}`}>
-                p.{p}
+                <span className="tab">p.{p}</span>
               </button>
             ))}
           </Fragment>
@@ -28,21 +29,17 @@ function Cited({ text, onPage }: { text: string; onPage: (p: number) => void }) 
   );
 }
 
-export function ConfidenceMeter({ value, threshold }: { value: number; threshold: number }) {
+export function ConfidenceMeter({ value, threshold, stateLabel }: { value: number; threshold: number; stateLabel?: string }) {
   const pct = Math.min(99, Math.max(1, Math.round(value * 100))); // never show 0% or 100% certainty
-  const band = value >= 0.75 ? 'good' : value >= threshold ? 'warn' : 'crit';
-  const label = value >= 0.75 ? 'Well supported' : value >= threshold ? 'Partly supported, check the page' : 'Not supported';
+  const label = stateLabel ?? (value >= 0.75 ? 'Well supported' : value >= threshold ? 'Partly supported · check the page' : 'Not supported');
   return (
     <div className="meter" data-testid="confidence" data-value={value.toFixed(3)}>
-      <div className="meter-row">
-        <span className="small strong">Confidence {pct}%</span>
-        <span className={`small band-${band}`}>{band === 'good' ? '✓' : band === 'warn' ? '!' : '✕'} {label}</span>
+      <div className="meter-head">
+        <span className="meter-num" aria-label={`Confidence ${pct} percent`}>{pct}<small>%</small></span>
+        <span className="meter-state">{label}</span>
       </div>
-      <div className="meter-track" role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct} aria-label="Calibrated confidence">
-        <div className={`meter-fill fill-${band}`} style={{ width: `${pct}%` }} />
-        <div className="meter-tick" style={{ left: `${threshold * 100}%` }} title={`Abstain below ${Math.round(threshold * 100)}%`} />
-      </div>
-      <div className="muted xsmall">Calibrated probability the retrieved pages support an answer. Abstains below {Math.round(threshold * 100)}%.</div>
+      <Ruler value={pct / 100} needle threshold={threshold} labels ariaLabel="Calibrated confidence" />
+      <p className="cap">Calibrated probability that the retrieved pages support an answer.</p>
     </div>
   );
 }
@@ -54,41 +51,45 @@ const REASONS = {
   citation_check_failed: 'The draft answer didn’t cite the pages it was given, so it was discarded.',
 } as const;
 
+// The gate's probability stays visible, but it must not read "well supported" under a stamp that says the opposite.
+const LATER: Partial<Record<keyof typeof REASONS, string>> = {
+  verifier_abstained: 'Gate passed · verifier said no',
+  empty_answer: 'Gate passed · nothing to quote',
+  citation_check_failed: 'Gate passed · draft discarded',
+};
+
 export function AnswerCard({ outcome, threshold, onPage }: { outcome: Outcome; threshold: number; onPage: (p: number) => void }) {
   const t = outcome.timings;
   const total = t.embedMs + t.retrieveMs + t.decideMs + t.verifyMs + t.generateMs;
   const pages = Array.from(new Set(outcome.hits.map((h) => h.chunk.page)));
   if (outcome.kind === 'abstain') {
     return (
-      <div className="card abstain" data-testid="abstain-card">
-        <div className="abstain-head">
-          <span className="abstain-icon" aria-hidden>⊘</span>
-          <div>
-            <div className="strong">I can’t answer that from this filing</div>
-            <div className="muted small">{REASONS[outcome.reason]}</div>
+      <div className="entry abstain" data-testid="abstain-card">
+        <div className="stamp" role="note">Not in this filing</div>
+        <p className="reason">{REASONS[outcome.reason]}</p>
+        <ConfidenceMeter value={outcome.confidence} threshold={threshold} stateLabel={LATER[outcome.reason]} />
+        <div className="pages">
+          <span className="label">Closest pages, if you want to check yourself</span>
+          <div className="tabs">
+            {pages.map((p) => (
+              <button key={p} className="tabbtn" onClick={() => onPage(p)} aria-label={`Open page ${p}`}><span className="tab">p.{p}</span></button>
+            ))}
           </div>
         </div>
-        <ConfidenceMeter value={outcome.confidence} threshold={threshold} />
-        <div className="small muted">Closest pages, if you want to check yourself:</div>
-        <div className="chips">
-          {pages.map((p) => (
-            <button key={p} className="cite" onClick={() => onPage(p)}>p.{p}</button>
-          ))}
-        </div>
-        <div className="xsmall muted">
+        <p className="meta">
           {outcome.reason === 'low_confidence' ? 'Stopped at the feature gate' : outcome.reason === 'verifier_abstained' ? 'Gate passed, then stopped by the verifier step (strict mode)' : 'Gate passed, then stopped by the citation check'} · {Math.round(total)} ms on-device
-        </div>
+        </p>
       </div>
     );
   }
   return (
-    <div className="card answer" data-testid="answer-card">
+    <div className="entry answer" data-testid="answer-card">
       <Cited text={outcome.text} onPage={onPage} />
       <ConfidenceMeter value={outcome.confidence} threshold={threshold} />
-      <div className="xsmall muted">
+      <p className="meta">
         {outcome.engine} · {outcome.verified ? `verifier: ANSWER (${outcome.evidencePage ?? '?'})` : 'no verifier'} · {Math.round(total)} ms · citation coverage{' '}
         {Math.round(outcome.citations.coverage * 100)}% · sources: {outcome.citations.cited.map((p) => `p.${p}`).join(', ')}
-      </div>
+      </p>
     </div>
   );
 }
