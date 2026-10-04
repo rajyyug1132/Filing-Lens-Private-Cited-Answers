@@ -58,7 +58,7 @@ const LATER: Partial<Record<keyof typeof REASONS, string>> = {
   citation_check_failed: 'Gate passed · draft discarded',
 };
 
-export function AnswerCard({ outcome, threshold, onPage }: { outcome: Outcome; threshold: number; onPage: (p: number) => void }) {
+export function AnswerCard({ outcome, threshold, onPage, onForce }: { outcome: Outcome; threshold: number; onPage: (p: number) => void; onForce?: () => void }) {
   const t = outcome.timings;
   const total = t.embedMs + t.retrieveMs + t.decideMs + t.verifyMs + t.generateMs;
   const pages = Array.from(new Set(outcome.hits.map((h) => h.chunk.page)));
@@ -76,6 +76,12 @@ export function AnswerCard({ outcome, threshold, onPage }: { outcome: Outcome; t
             ))}
           </div>
         </div>
+        {onForce && !outcome.forced && (outcome.reason === 'low_confidence' || outcome.reason === 'verifier_abstained') && (
+          <p className="anyway">
+            <button className="textbtn" onClick={onForce} data-testid="answer-anyway">Answer anyway</button>
+            <span className="cap">Uses the closest pages. Unverified.</span>
+          </p>
+        )}
         <p className="meta">
           {outcome.reason === 'low_confidence' ? 'Stopped at the feature gate' : outcome.reason === 'verifier_abstained' ? 'Gate passed, then stopped by the verifier step (strict mode)' : 'Gate passed, then stopped by the citation check'} · {Math.round(total)} ms on-device
         </p>
@@ -85,7 +91,11 @@ export function AnswerCard({ outcome, threshold, onPage }: { outcome: Outcome; t
   return (
     <div className="entry answer" data-testid="answer-card">
       <Cited text={outcome.text} onPage={onPage} />
-      <ConfidenceMeter value={outcome.confidence} threshold={threshold} />
+      {outcome.unverified ? (
+        <p className="unv" data-testid="unverified">Below the gate: unverified</p>
+      ) : (
+        <ConfidenceMeter value={outcome.confidence} threshold={threshold} />
+      )}
       <p className="meta">
         {outcome.engine} · {outcome.verified ? `verifier: ANSWER (${outcome.evidencePage ?? '?'})` : 'no verifier'} · {Math.round(total)} ms · citation coverage{' '}
         {Math.round(outcome.citations.coverage * 100)}% · sources: {outcome.citations.cited.map((p) => `p.${p}`).join(', ')}

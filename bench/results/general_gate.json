@@ -1,0 +1,260 @@
+{
+ "threshold": 0.7,
+ "accuracy_in_sample": 0.95,
+ "accuracy_cv5": 0.925,
+ "answerable_passed": 18,
+ "negatives_blocked": 20,
+ "n": 40,
+ "unlabelled": [
+  {
+   "q": "Details",
+   "p": 0.084
+  },
+  {
+   "q": "Introduction",
+   "p": 0.972
+  }
+ ],
+ "rows": [
+  {
+   "q": "Which textbooks are listed?",
+   "label": "answerable",
+   "p": 0.718,
+   "pass": true
+  },
+  {
+   "q": "Which reference books are listed?",
+   "label": "answerable",
+   "p": 0.874,
+   "pass": true
+  },
+  {
+   "q": "What are the course objectives?",
+   "label": "answerable",
+   "p": 0.914,
+   "pass": true
+  },
+  {
+   "q": "What are the course outcomes?",
+   "label": "answerable",
+   "p": 0.974,
+   "pass": true
+  },
+  {
+   "q": "How many credits is the course?",
+   "label": "answerable",
+   "p": 0.917,
+   "pass": true
+  },
+  {
+   "q": "How many hours is Module 3?",
+   "label": "answerable",
+   "p": 0.903,
+   "pass": true
+  },
+  {
+   "q": "What does Module 2 cover?",
+   "label": "answerable",
+   "p": 0.812,
+   "pass": true
+  },
+  {
+   "q": "How is the course assessed?",
+   "label": "answerable",
+   "p": 0.785,
+   "pass": true
+  },
+  {
+   "q": "How many marks for CIE?",
+   "label": "answerable",
+   "p": 0.912,
+   "pass": true
+  },
+  {
+   "q": "How many marks for SEE?",
+   "label": "answerable",
+   "p": 0.808,
+   "pass": true
+  },
+  {
+   "q": "What topics are in Module 4?",
+   "label": "answerable",
+   "p": 0.875,
+   "pass": true
+  },
+  {
+   "q": "What is the course code?",
+   "label": "answerable",
+   "p": 0.985,
+   "pass": true
+  },
+  {
+   "q": "When is Internal test 1?",
+   "label": "answerable",
+   "p": 0.971,
+   "pass": true
+  },
+  {
+   "q": "What's the main syllabus?",
+   "label": "answerable",
+   "p": 0.204,
+   "pass": false
+  },
+  {
+   "q": "Which topics are covered under deadlocks?",
+   "label": "answerable",
+   "p": 0.808,
+   "pass": true
+  },
+  {
+   "q": "What is covered under virtual memory?",
+   "label": "answerable",
+   "p": 0.892,
+   "pass": true
+  },
+  {
+   "q": "Who wrote Operating System Concepts?",
+   "label": "answerable",
+   "p": 0.956,
+   "pass": true
+  },
+  {
+   "q": "What are the prerequisites?",
+   "label": "answerable",
+   "p": 0.978,
+   "pass": true
+  },
+  {
+   "q": "How many internal tests are there?",
+   "label": "answerable",
+   "p": 0.895,
+   "pass": true
+  },
+  {
+   "q": "What is the L-T-P split?",
+   "label": "answerable",
+   "p": 0.084,
+   "pass": false
+  },
+  {
+   "q": "What is the DBMS syllabus?",
+   "label": "negative",
+   "p": 0.187,
+   "pass": false
+  },
+  {
+   "q": "Who won the 2018 FIFA World Cup?",
+   "label": "negative",
+   "p": 0.07,
+   "pass": false
+  },
+  {
+   "q": "What was Tesla's revenue in 2022?",
+   "label": "negative",
+   "p": 0.078,
+   "pass": false
+  },
+  {
+   "q": "How do I bake sourdough bread?",
+   "label": "negative",
+   "p": 0.074,
+   "pass": false
+  },
+  {
+   "q": "What is the capital of Australia?",
+   "label": "negative",
+   "p": 0.066,
+   "pass": false
+  },
+  {
+   "q": "Which textbooks are listed for Computer Networks?",
+   "label": "negative",
+   "p": 0.697,
+   "pass": false
+  },
+  {
+   "q": "What are the modules of Machine Learning?",
+   "label": "negative",
+   "p": 0.179,
+   "pass": false
+  },
+  {
+   "q": "What is the hostel fee?",
+   "label": "negative",
+   "p": 0.1,
+   "pass": false
+  },
+  {
+   "q": "Who is the vice chancellor?",
+   "label": "negative",
+   "p": 0.068,
+   "pass": false
+  },
+  {
+   "q": "What is the stock price of Apple?",
+   "label": "negative",
+   "p": 0.074,
+   "pass": false
+  },
+  {
+   "q": "When is the Diwali holiday?",
+   "label": "negative",
+   "p": 0.079,
+   "pass": false
+  },
+  {
+   "q": "What is the exam hall seating plan?",
+   "label": "negative",
+   "p": 0.176,
+   "pass": false
+  },
+  {
+   "q": "List the lab experiments for Database Management Systems",
+   "label": "negative",
+   "p": 0.48,
+   "pass": false
+  },
+  {
+   "q": "What is the placement record this year?",
+   "label": "negative",
+   "p": 0.127,
+   "pass": false
+  },
+  {
+   "q": "How tall is Mount Everest?",
+   "label": "negative",
+   "p": 0.079,
+   "pass": false
+  },
+  {
+   "q": "What is the syllabus for Digital Signal Processing?",
+   "label": "negative",
+   "p": 0.211,
+   "pass": false
+  },
+  {
+   "q": "Who is the head of the mathematics department?",
+   "label": "negative",
+   "p": 0.42,
+   "pass": false
+  },
+  {
+   "q": "What is the bus timetable?",
+   "label": "negative",
+   "p": 0.149,
+   "pass": false
+  },
+  {
+   "q": "How many goals did Messi score?",
+   "label": "negative",
+   "p": 0.312,
+   "pass": false
+  },
+  {
+   "q": "What is the library membership fee?",
+   "label": "negative",
+   "p": 0.11,
+   "pass": false
+  }
+ ]
+}

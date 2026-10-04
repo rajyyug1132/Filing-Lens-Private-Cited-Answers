@@ -218,3 +218,10 @@ button { cursor: pointer; background: none; border: 0; }
   .grid.has-doc .rail { border-bottom: 1px solid var(--rule); }
   .casebar { border-top: 0; padding-top: var(--s2); }
 }
+
+/* ---- answer anyway / unverified / own question ---- */
+.anyway { margin-top: var(--s2); display: flex; flex-wrap: wrap; align-items: center; gap: 0 var(--s2); }
+.anyway .textbtn { margin-left: calc(var(--s1) * -1); }
+.unv { display: inline-block; margin-top: var(--s2); border: 1px solid var(--ink); padding: 4px var(--s1); font: 400 12px/16px var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.suggest .own { padding: var(--s1) 0 var(--s2); border-top: 1px solid var(--rule); }
+.suggest .textbtn.more { display: inline-flex; align-items: center; width: auto; min-height: 44px; border: 0; font: 400 12px/16px var(--mono); text-transform: uppercase; letter-spacing: 0.08em; margin-left: calc(var(--s1) * -1); }
