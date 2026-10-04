@@ -15,8 +15,74 @@
       "verifier_calls_pct": 0.0,
       "page_source": "top-ranked retrieved page",
       "latency_where": "Node v22.22.0, 4 vCPU container, no GPU"
+    },
+    "Verifier only (fp16_llamacpp)": {
+      "easy_acc": 0.509090909090909,
+      "easy_ece": 0.47621382858871125,
+      "easy_n": 110,
+      "hard_acc": 0.49523809523809526,
+      "hard_ece": 0.49572044137893045,
+      "hard_n": 105,
+      "citation_page_match": 0.5,
+      "answered_gold_answer_cases": 2,
+      "latency_p50_ms": 7446.60605450008,
+      "verifier_calls_pct": 100.0
+    },
+    "Cascade: gate \u2192 verifier (fp16_llamacpp)": {
+      "easy_acc": 0.5181818181818182,
+      "easy_ece": 0.3923870226664633,
+      "easy_n": 110,
+      "hard_acc": 0.49523809523809526,
+      "hard_ece": 0.40372670803656424,
+      "hard_n": 105,
+      "citation_page_match": 0.5,
+      "answered_gold_answer_cases": 2,
+      "latency_p50_ms": 7202.4441170001755,
+      "verifier_calls_pct": 52.5
+    },
+    "Verifier only (gguf_q4)": {
+      "easy_acc": 0.5272727272727272,
+      "easy_ece": 0.46789010154170607,
+      "easy_n": 110,
+      "hard_acc": 0.49523809523809526,
+      "hard_ece": 0.4737038269123852,
+      "hard_n": 105,
+      "citation_page_match": 0.5,
+      "answered_gold_answer_cases": 4,
+      "latency_p50_ms": 7155.5111724997005,
+      "verifier_calls_pct": 100.0
+    },
+    "Cascade: gate \u2192 verifier (gguf_q4)": {
+      "easy_acc": 0.5363636363636364,
+      "easy_ece": 0.40968000924805753,
+      "easy_n": 110,
+      "hard_acc": 0.49523809523809526,
+      "hard_ece": 0.3910620056400215,
+      "hard_n": 105,
+      "citation_page_match": 0.5,
+      "answered_gold_answer_cases": 4,
+      "latency_p50_ms": 6938.637964499811,
+      "verifier_calls_pct": 52.5
     }
   },
-  "status": "pending",
-  "cascade_verifier_calls_pct": 52.5
+  "status": "real",
+  "cascade_verifier_calls_pct": 52.5,
+  "generation": {
+    "fp16_llamacpp": {
+      "answer_accuracy_auto_graded_gold_answer_cases": 0.01818181818181818,
+      "answer_cites_only_snippet_pages": 0.0,
+      "tokens_per_s_median": 3.6328771828053066,
+      "prompt_tokens_check_max": 2632,
+      "optimizer": "BootstrapFewShot(2 demos)",
+      "dev_metric": 0.5480851063829787
+    },
+    "gguf_q4": {
+      "answer_accuracy_auto_graded_gold_answer_cases": 0.03636363636363636,
+      "answer_cites_only_snippet_pages": 0.25,
+      "tokens_per_s_median": 3.8479491494990516,
+      "prompt_tokens_check_max": 2632,
+      "optimizer": "BootstrapFewShot(2 demos)",
+      "dev_metric": 0.5480851063829787
+    }
+  }
 }

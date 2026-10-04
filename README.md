@@ -65,13 +65,14 @@ Sets: 150 answer, 150 Easy, 140 Hard; one gate trained on all of them with 5-fol
 | System | Easy acc. | Hard acc. | ECE ↓ (Easy / Hard) | Citation page match | p50 latency | Verifier calls |
 |---|---|---|---|---|---|---|
 | Feature gate only | 0.864 | 0.524 | 0.192 / 0.156 | 0.279 (top-ranked page) | 0.42 ms | 0% |
-| Verifier only (Qwen2.5-3B, DSPy-compiled) | pending (Kaggle) | pending (Kaggle) | pending | pending | pending | 100% |
-| Cascade: gate → verifier | pending (Kaggle) | pending (Kaggle) | pending | pending | pending | 52% |
+| Verifier only (fp16_llamacpp) | 0.509 | 0.495 | 0.476 / 0.496 | 0.500 | 7447 ms | 100% |
+| Cascade: gate → verifier (fp16_llamacpp) | 0.518 | 0.495 | 0.392 / 0.404 | 0.500 | 7202 ms | 52% |
+| Verifier only (gguf_q4) | 0.527 | 0.495 | 0.468 / 0.474 | 0.500 | 7156 ms | 100% |
+| Cascade: gate → verifier (gguf_q4) | 0.536 | 0.495 | 0.410 / 0.391 | 0.500 | 6939 ms | 52% |
 
 Test split only: 160 instances (company-grouped): 55 answer, 55 Easy, 50 Hard. Only 27 of the 55 answer cases have a gold page in the snippets, which caps citation page match and answer accuracy. Gate latency: features + LR on Node v22.22.0, 4 vCPU container, no GPU; verifier latency: one verifier call on the Kaggle T4 build named in the row. Retrieval (shared by all rows) is not included.
 
-The verifier and cascade rows are filled by `python bench/ingest_gen.py` once `bench/results/cascade_results.jsonl` comes back from Kaggle.
-
+**Verifier result (real, Kaggle T4):** the compiled verifier abstains on nearly everything. It says ANSWER on 2 of 55 answer cases (fp16) and 4 of 55 (Q4), so it adds almost nothing over always-abstain: Easy 0.509 / 0.527, Hard 0.495. Behind the gate it also drags Easy accuracy from 0.864 to 0.518 / 0.536. Auto-graded answer accuracy on the gold-answer cases: 0.018 (fp16), 0.036 (Q4). Generation ran at a median 3.6 / 3.8 tokens/s on llama.cpp (vLLM failed to start on the T4). Compile dev score was 0.548 against an always-abstain baseline of 0.5, so the BootstrapFewShot program did not learn to recognise an answerable context from 2 demos and 3B weights. Raw per-instance output: `bench/results/cascade_results.jsonl`.
 ### Kaggle run (T4)
 1. Merge to `main` (the notebook reads its inputs from `main`). Import `bench/kaggle_gen.ipynb` with GPU T4 and Internet on, and Run All. It serves Qwen2.5-3B fp16 with vLLM (`dtype=half`, since the T4 has no bf16; if vLLM won't start it falls back to llama.cpp on the fp16 GGUF), logs exact Qwen2.5 token counts for the worst-case prompts (`token_counts.json`), compiles `Lens` with BootstrapFewShot (2 demos) on the train split, optionally runs MIPROv2 light (kept only if dev improves), then evaluates on the test split with fp16 and with the GGUF Q4_K_M build (llama.cpp).
 2. Download `cascade_results.jsonl`, `token_counts.json`, `app_verifier.json` and `verifier.json`. Commit `app_verifier.json` as `app/prompts/verifier.json`, and the rest to `bench/results/`.
@@ -97,7 +98,7 @@ Tests use `?engine=fixture`, which replays `public/fixtures/recorded-responses.j
 - **Qwen2.5-3B/1.5B-Instruct**: downloaded at runtime by the user's browser, not redistributed here. Check the Qwen licence on the model card before commercial use.
 
 ## Limits
-- The feature gate can't see content: Hard accuracy 0.52. Verifier and cascade numbers are pending the Kaggle run.
+- The feature gate can't see content: Hard accuracy 0.52. The DSPy-compiled 3B verifier didn't fix that: it abstains on 51–53 of 55 answer cases (Hard 0.495). As shipped, the cascade answers rarely; the gate alone is the stronger Easy filter (0.864).
 - Retrieval is the bottleneck: gold-page recall@4 0.440, @8 0.633. Under the 3k cap the 3B sees the gold page 57% of the time, and the sentence snippets keep it 53% of the time.
 - A failure found and fixed: Best Buy's 10-K never mentions Walmart, yet "Walmart capex?" passed the gate. Adding a feature for whether the companies a question names appear in the filing fixed it (0.820 → 0.910 on the earlier own-vs-wrong-company bench; `bench/results/history.json`).
 - Answers are auto-graded (number within 1%, else token-F1), an approximation of FinanceBench's human grading.
