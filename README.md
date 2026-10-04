@@ -18,7 +18,7 @@ question ─▶ hybrid retrieval (dense + BM25, RRF, k=8, prompt capped at 3000 
 
 - **Zero document upload.** pdf.js, the embedding model, the ONNX runtime and wllama are npm packages served from the app's own origin. There are no external script tags. The only third-party request is the one-time model weight download (GET, cached). The e2e test records every request during upload → ask → answer → abstain and asserts 0 requests to other origins and 0 requests with a body (last run: 20 requests, 0 external, 0 with a body).
 - **Feature gate** (`lib/retrieve.ts`, `lib/calibrate.ts`, `lib/decision-model.json`): retrieval-score, word-coverage, entity and year features; class-balanced logistic regression with temperature scaling. It is cheap (0.41 ms) but cannot read content.
-- **Verifier + answerer** are a DSPy program (`bench/lens_program.py`) compiled on Kaggle and exported to `app/prompts/verifier.json`. `lib/dspy-chat.ts` rebuilds DSPy's ChatAdapter prompt in the browser, and `tests/unit/dspy-chat.test.ts` asserts it is identical to DSPy's own rendering. Until the Kaggle compile lands, the app ships the **uncompiled** program (0 demos).
+- **Verifier + answerer** are a DSPy program (`bench/lens_program.py`) compiled on Kaggle and exported to `app/prompts/verifier.json`. `lib/dspy-chat.ts` rebuilds DSPy's ChatAdapter prompt in the browser, and `tests/unit/dspy-chat.test.ts` asserts it is identical to DSPy's own rendering. The app ships the program compiled on Kaggle: BootstrapFewShot with 2 demos per predictor (MIPROv2 light was tried and not kept, since its balanced dev score of 0.519 was below 0.548).
 
 ## Bench (cloud, real numbers)
 
@@ -58,7 +58,7 @@ Sets: 150 answer, 150 Easy, 140 Hard; one gate trained on all of them with 5-fol
 
 ![Recall vs k](bench/results/recall.svg)
 
-**k selection:** among k = 4, 8 and 12, no k reaches recall 0.6 once the prompt is capped at 3,000 tokens. Uncapped k=8 has recall 0.633 but a p95 prompt of 3075 tokens. Capped, it gives 0.567, the highest of the three, so k=8 with the cap ships. Token counts come from the Qwen3.5 tokenizer on npm as a proxy for Qwen2.5; the Kaggle run logs exact counts. Reranker: skipped. No npm package ships cross-encoder weights; the one candidate downloads from Hugging Face at runtime and is AGPL-3.0.
+**k selection:** among k = 4, 8 and 12, no k reaches recall 0.6 once the prompt is capped at 3,000 tokens. Uncapped k=8 has recall 0.633 but a p95 prompt of 3075 tokens. Capped, it gives 0.567, the highest of the three, so k=8 with the cap ships. Token counts in the bench come from the Qwen3.5 tokenizer on npm as a proxy. The Kaggle run measured the real Qwen2.5 tokenizer and chat template on the compiled prompts (`bench/results/token_counts.json`): verifier max 2,632 (p95 2,514), answerer max 2,567 (p95 2,449), both within the 3,000-token budget. Reranker: skipped. No npm package ships cross-encoder weights; the one candidate downloads from Hugging Face at runtime and is AGPL-3.0.
 
 ### Cascade (test split)
 
